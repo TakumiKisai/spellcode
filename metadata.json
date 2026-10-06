@@ -1,0 +1,6 @@
+{
+  "name": "Spellcode: Runtime",
+  "description": "Roguelite coding deck-builder. Compile spells into an execution pipeline, dodge bugs in real-time arenas, and squash errors.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
