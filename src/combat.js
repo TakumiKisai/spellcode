@@ -77,6 +77,7 @@ export function stats(c, ST) {
  }
  a.dmg *= (ST.dmg || 1) * (ST.stack ? 1 + .1 * nm : 1);
  a.cd *= (ST.cd || 1) * (1 - .03 * nm * (ST.compiler || 0));
+ if (a.k === 'mine') a.cd = Math.max(a.cd, 1.4);
  a.size *= ST.stack ? 1 + .06 * nm : 1;
  a.nm = nm;
  return a;

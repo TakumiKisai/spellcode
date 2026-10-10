@@ -1,6 +1,10 @@
 import { MUSIC } from './data.js';
 
 export let AC = null, MUTE = false, lastS = {};
+export const VOL = { master: 1, music: 1, sfx: 1 };
+export function applyVolumes() {
+ if (musicBus) musicBus.gain.value = MUSIC_MASTER * VOL.master * VOL.music;
+}
 export function setMute(m) {
  MUTE = m;
  if (m) stopMusic();
@@ -19,7 +23,7 @@ export function snd(f, d = .08, type = 'square', v = .04, sl = 0, key) {
   o.type = type;
   o.frequency.setValueAtTime(f, n);
   if (sl) o.frequency.exponentialRampToValueAtTime(Math.max(30, f + sl), n + d);
-  g.gain.setValueAtTime(v, n);
+  g.gain.setValueAtTime(Math.max(.0002, v * VOL.master * VOL.sfx), n);
   g.gain.exponentialRampToValueAtTime(.001, n + d);
   o.connect(g);
   g.connect(AC.destination);
@@ -35,7 +39,7 @@ export function ensureMusicContext() {
   musicCtx = musicCtx || new (window.AudioContext || window.webkitAudioContext)();
   if (!musicBus) {
    musicBus = musicCtx.createGain();
-   musicBus.gain.value = MUSIC_MASTER;
+   musicBus.gain.value = MUSIC_MASTER * VOL.master * VOL.music;
    musicBus.connect(musicCtx.destination);
   }
   if (musicCtx.state === 'suspended') musicCtx.resume();

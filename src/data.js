@@ -21,7 +21,7 @@ export const MUSIC = {
 
 export const SPELLS = {
  fireball:{n:'fireball()',d:'Aimed shot',r:0,k:'proj',dmg:13,cd:1,sp:290,rad:5,pierce:0,col:'#ff7a45'},
- bolt:{n:'bolt()',d:'Fast shot, pierces 2',r:0,k:'proj',dmg:7,cd:.55,sp:470,rad:4,pierce:2,col:'#5ee0d0'},
+ bolt:{n:'bolt()',d:'Fast shot, pierces 2',r:0,k:'proj',dmg:7,cd:.55,sp:360,rad:4,pierce:2,col:'#5ee0d0'},
  lance:{n:'lance()',d:'Slow cast, pierces everything',r:1,k:'proj',dmg:32,cd:2.2,sp:580,rad:6,pierce:99,col:'#e2b24a'},
  nova:{n:'nova()',d:'Ring blast + knockback around you',r:0,k:'nova',dmg:13,cd:2.2,rad:92,knock:120,col:'#b48cff'},
  chain:{n:'chain()',d:'Lightning jumps between bugs (4 jumps)',r:1,k:'chain',dmg:13,cd:.9,rad:200,jumps:4,col:'#ffe066'},
@@ -45,7 +45,7 @@ export const MODS = {
  pierce:{n:'pierce()',r:1,d:'+2 pierce, +2 chain jumps',h:'+ map(), ricochet',f:(a,l)=>{a.pierce+=2*l;a.jumps+=2*l}},
  explode:{n:'explode()',r:2,d:'Hits blast nearby bugs for 60%',h:'+ big, knockback',f:(a,l)=>{a.expl=l}},
  split:{n:'fork()',r:2,d:'Hits split into 2 weaker shots',h:'+ for(2), explode',f:(a,l)=>{a.split=l}},
- big:{n:'malloc()',r:1,d:'Bigger, slower, +25% dmg, +25% area',h:'+ explode, Stack Overflow',f:(a,l)=>{for(let i=0;i<l;i++){a.size*=1.9;a.sp*=.8;a.dmg*=1.25;a.area*=1.25}}},
+ big:{n:'malloc()',r:1,d:'Bigger, slower, +25% dmg, +25% area',h:'+ explode, Stack Overflow',f:(a,l)=>{for(let i=0;i<l;i++){a.size*=1.5;a.sp*=.8;a.dmg*=1.25;a.area*=1.25}}},
  burn:{n:'burn',r:1,d:'Burn for 40% damage over 3s',h:'+ map(), async',f:(a,l)=>{a.burn=l}},
  freeze:{n:'freeze',r:2,d:'Hits slow bugs 45%',h:'+ nova(), mine()',f:(a,l)=>{a.freeze=l}},
  knock:{n:'push()',r:1,d:'Knockback on hit',h:'+ pillars, void arenas',f:(a,l)=>{a.knock+=130*l}},
@@ -84,7 +84,7 @@ export const UPG = {
  dead:{n:'Dead Code',r:3,m:1,d:'25% per cast: a random extra modifier triggers',f:s=>{s.chaos+=.25}},
  null:{n:'Null Reference',r:4,m:1,d:'Dash phases through danger: long i-frames and a damaging trail',f:s=>{s.nullref=1}},
  panic:{n:'Kernel Panic',r:4,m:1,d:'Kills explode for 50% of that bug\'s max HP',f:s=>{s.panic=1}},
- fork:{n:'Fork Bomb',r:4,m:1,d:'15% per cast: the cast repeats in full. Max HP -20%',f:s=>{s.fork=1;s.hpm*=.8}}
+ fork:{n:'Fork Bomb',r:4,m:1,d:'15% per cast: repeats that spell’s full execution. Max HP -20%',f:s=>{s.fork=1;s.hpm*=.8}}
 };
 
 // UNO-Style Starting Decks: plenty of basic duplicates, rare power cards
@@ -98,7 +98,7 @@ export const HOSTS = {
  },
  overclock:{
   n:'THE OVERCLOCKER',hp:42,
-  start:'bolt bolt bolt bolt bolt chain chain shield shield shield async async async async for for for homing map ping',
+  start:'bolt bolt bolt bolt bolt chain chain shield shield shield async async async async for for for homing map ping lance',
   d:'Casts 35% faster while moving.',w:'Low HP. Standing still is slow.',
   g:'%',c:'#ff7a45',j:['#ff7a45','#ff3b1f','#ffe066'],
   f:s=>{s.mv+=.35;s.still+=.1}

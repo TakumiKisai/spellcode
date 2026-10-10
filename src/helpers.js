@@ -75,7 +75,7 @@ export function cardH(k, attr, u, v, cls, G) {
    <em style="color:${RC[d.r] || '#9d92b5'}">${RAR[d.r] || 'COMMON'}</em>
    <b>${d.n || k}${own}</b>
    <small>${d.d || ''}</small>
-   ${d.h ? `<i>${d.h}</i>` : ''}
+   ${d.h ? `<i class="syn">// synergy: ${String(d.h).replace(/^\+\s*/, '')}</i>` : ''}
    ${u ? '' : wo(k)}
    ${xl(k, v, u, G)}
  </button>`;
