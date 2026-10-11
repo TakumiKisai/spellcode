@@ -1,5 +1,5 @@
 import { W, H, GW, GH, PLAN, CHAOS } from './constants.js';
-import { RAR, RC, SPELLS, MODS, UPG, HOSTS, DK, WORLDS, EN, ARENAS, BOSSES } from './data.js';
+import { RAR, RC, SPELLS, MODS, UPG, HOSTS, DK, WORLDS, EN, ARENAS, BOSSES, RACE } from './data.js';
 import { $, ri, pick, cl, shuffle, css, mk, defOf, isMod, maxV, okMod, wo, xText, xl, cardH } from './helpers.js';
 import { renderOSWindows } from './probability.js';
 import { snd, ensureMusicContext, preloadMusic, stopMusic, setMusic, MUTE, setMute, VOL, applyVolumes } from './audio.js';
@@ -78,7 +78,7 @@ const hostOpen = k => {
  return !h.lt || (h.lt === 'Win a run' ? META.wins > 0 : META.best >= 4) || (META.own || {})[k];
 };
 
-function bossTrack(b) { return b === 'runtime' ? 'runtime' : b === 'leak' ? 'leak' : 'segfault'; }
+function bossTrack(b) { return b === 'runtime' ? 'runtime' : b === 'leak' ? 'leak' : b === 'race' ? 'race' : 'segfault'; }
 function worldTrack(w) {
  if (w === WORLDS.boot) return 'boot';
  if (w === WORLDS.deadlock) return 'deadlock';
@@ -154,7 +154,7 @@ export function newRun() {
 }
 
 function genRound(i) {
- const L = G.layer, boss = L === 5 ? (G.sector === 4 ? 'runtime' : pick(['segfault', 'leak'])) : null, k = boss ? 'fb' : (L === 2 || L === 4) ? 'e' : 'n';
+ const L = G.layer, boss = L === 5 ? ({ 1: 'leak', 2: 'segfault', 3: 'race', 4: 'runtime' }[G.sector] || 'runtime') : null, k = boss ? 'fb' : (L === 2 || L === 4) ? 'e' : 'n';
  const ar = boss ? BOSSES[boss].arena : pick(G.world.ar.filter(a => a !== G.lastArena));
  G.lastArena = ar;
  return { i, k, boss, arena: ar, budget: Math.min(5 + 2.2 * i, 36), elite: false };
@@ -527,6 +527,10 @@ function spawnBoss() {
  const b = BOSSES[G.cfg.boss], bh = Math.round(b.hp * (1 + .035 * (G.cfg.i - 1)) * (G.dm || 1));
  const e = spawnE('chaser', 320, 70);
  Object.assign(e, { boss: 1, g: b.g, c: b.c, hp: bh, max: bh, sp: b.sp, r: b.r, dmg: 14, ph: 0, pt: {}, beh: 'boss', bd0: b, gt: 0, projShape: G.cfg.boss });
+ if (b.race) {
+  Object.assign(e, { race: 1, twin: 'merged', max0: bh, inv: 0, rp: { red: rProc('red'), blue: rProc('blue') } });
+  R.race = { lastRes: -9, split: 0, red: null, blue: null };
+ }
  R.banner = { t: 2.4, s: 'WARNING: ' + b.n };
  snd(80, .8, 'sawtooth', .08, 40);
 }
@@ -865,6 +869,7 @@ function pullTo(x, y, r) {
 }
 function hitE(e, d, a, src, np) {
  if (e.dead) return;
+ if (e.inv > 0) { txt(e.x, e.y - e.r, 'IMMUNE', '#aab4c8', 10); return; }
  const sc = a.crit >= 1, crit = sc || Math.random() < ST.crit;
  let v = d * (crit ? (sc ? 1 + a.crit : 2) : 1) * e.prot * (e.vuln > 0 ? 1.5 : 1);
  const arm = Math.max(0, (e.boss ? 6 : e.k === 'tank' ? 6 : e.elite ? 4 : 0) - (e.shT > 0 ? (e.shred || 0) : 0));
@@ -882,6 +887,7 @@ function hitE(e, d, a, src, np) {
   e.kx += dx / l * k; e.ky += dy / l * k;
  }
  if (a.leech && G.hp < G.max) G.hp = Math.min(G.max, G.hp + Math.min(1.5 * a.leech, v * .05 * a.leech));
+ if (e.twin === 'merged' && e.hp <= e.max * RACE.splitAt && !(e.splitT > 0)) { e.hp = Math.max(1, e.hp); startSplit(e); }
  if (e.hp <= 0) kill(e, np);
 }
 function kill(e, np) {
@@ -894,10 +900,18 @@ function kill(e, np) {
  if (e.beh === 'split') for (let i = 0; i < 2; i++) spawnE('swarm', e.x + ri(14) - 7, e.y + ri(14) - 7);
  if (e.blast) R.tg.push({ x: e.x, y: e.y, r: 52, t: .7, max: .7, dmg: 12, own: 'e', c: '#ff5c7a' });
  if (e.boss) {
-  R.bossDead = 1;
-  R.en.forEach(x => { if (!x.dead && x !== e) { x.dead = 1; burst(x.x, x.y, x.c, 6); } });
-  R.eb = []; R.shake = 18;
-  snd(60, .8, 'sawtooth', .09, -20);
+  const partner = e.twin && e.twin !== 'merged' ? R.en.find(x => x.boss && !x.dead && x !== e) : null;
+  if (partner) {
+   // One twin down: only its own shots and zones go away; the other Host keeps fighting.
+   R.eb = R.eb.filter(b => b.own !== e.twin); R.tg = R.tg.filter(z => z.own2 !== e.twin);
+   R.shake = 12; R.banner = { t: 1.6, s: (e.twin === 'red' ? 'RED' : 'BLUE') + ' PROCESS TERMINATED' };
+   snd(100, .5, 'sawtooth', .08, -40);
+  } else {
+   R.bossDead = 1;
+   R.en.forEach(x => { if (!x.dead && x !== e) { x.dead = 1; burst(x.x, x.y, x.c, 6); } });
+   R.eb = []; R.shake = 18;
+   snd(60, .8, 'sawtooth', .09, -20);
+  }
  }
 }
 
@@ -925,6 +939,7 @@ function ebul(x, y, an, sp, d, c, kind) {
 }
 
 function bossAI(e, dt, d) {
+ if (e.bd0.race) { raceAI(e, dt, d); return; }
  PW = e.bd0.grow ? 1 : 0;
  const b = e.bd0, f = e.hp / e.max, ph = f < .33 ? 2 : f < .66 ? 1 : 0;
  if (e.tpd) {
@@ -980,6 +995,107 @@ function bossAI(e, dt, d) {
  PW = 0;
 }
 
+
+// ===== THE RACE CONDITION (sector 3 boss): two competing attack processes, then a split into two Hosts =====
+const rrange = a => a[0] + Math.random() * (a[1] - a[0]);
+function rProc(kind) {
+ const C = kind === 'red' ? RACE.dash : RACE.shoot;
+ return { kind, st: 0, cd: rrange(C.cd) * (kind === 'blue' ? 1.15 : 1), t: 0, ang: 0, lock: false, variant: 0, alt: 0 };
+}
+function raceAI(e, dt, d) {
+ if (e.splitT > 0) {
+  // mitosis: boss is frozen and protected until the animation ends
+  e.splitT -= dt; e.dash = null;
+  if (e.splitT <= 0) finishSplit(e);
+  return;
+ }
+ if (e.twin === 'merged' && e.hp <= e.max * RACE.splitAt) { e.hp = Math.max(1, e.hp); startSplit(e); return; }
+ if (R.end || !e.rp) return;
+ for (const k in e.rp) raceProc(e, e.rp[k], dt);
+}
+function raceProc(e, pr, dt) {
+ const red = pr.kind === 'red', C = red ? RACE.dash : RACE.shoot, p = R.p, twin = e.twin !== 'merged';
+ if (pr.st === 0) {
+  pr.cd -= dt;
+  if (pr.cd > 0) return;
+  pr.st = 1; pr.t = C.tele; pr.lock = false; pr.ang = Math.atan2(p.y - e.y, p.x - e.x);
+  if (!red) {
+   pr.alt ^= 1; pr.variant = pr.alt; // alternates: spread of shots / marked-area strike
+   if (pr.variant === 0) {
+    // marked-area strike: the zone markers ARE the telegraph and detonate when the wind-up ends
+    for (let i = 0; i < C.zones; i++) {
+     const x = i ? cl(p.x + ri(140) - 70, 40, 600) : p.x, y = i ? cl(p.y + ri(140) - 70, 40, 360) : p.y;
+     R.tg.push({ x, y, r: C.zr, t: C.tele, max: C.tele, dmg: C.zdmg, own: 'e', c: RACE.blue, own2: e.twin });
+    }
+   }
+  }
+  snd(red ? 260 : 200, .12, 'triangle', .04, 60);
+ } else if (pr.st === 1) {
+  pr.t -= dt;
+  if (pr.t > C.lock) pr.ang = Math.atan2(p.y - e.y, p.x - e.x); // the aim follows you, then locks for the final moment
+  else pr.lock = true;
+  if (pr.t > 0) return;
+  if (!red && pr.variant === 0) { pr.st = 0; pr.cd = rrange(C.cd) * (twin ? RACE.twinCd : 1); R.race.lastRes = R.t; return; }
+  // order rule: two damaging moments never land closer than RACE.gap apart, so there's always a reaction window
+  if (R.t - R.race.lastRes < RACE.gap) { pr.t = .05; return; }
+  R.race.lastRes = R.t;
+  if (red) {
+   e.dash = { dx: Math.cos(pr.ang), dy: Math.sin(pr.ang), sp: C.sp };
+   pr.st = 2; pr.t = C.t;
+   burst(e.x, e.y, RACE.red, 10, 140); snd(220, .15, 'sawtooth', .05, 120);
+  } else {
+   for (let i = 0; i < C.n; i++) {
+    ebul(e.x, e.y, pr.ang + (i - (C.n - 1) / 2) * C.spread, C.sp, C.dmg, RACE.blue, 'hex');
+    R.eb[R.eb.length - 1].own = e.twin;
+   }
+   snd(170, .2, 'triangle', .05, -60);
+   pr.st = 0; pr.cd = rrange(C.cd) * (twin ? RACE.twinCd : 1);
+  }
+ } else if (pr.st === 2) {
+  pr.t -= dt;
+  if (pr.t <= 0) { e.dash = null; pr.st = 0; pr.cd = rrange(C.cd) * (twin ? RACE.twinCd : 1); R.race.lastRes = R.t; }
+ }
+}
+function raceMove(e, ux, uy, d, sp) {
+ if (e.splitT > 0) return [0, 0, 0];
+ if (e.dash) return [e.dash.dx, e.dash.dy, e.dash.sp];
+ let slow = 1;
+ if (e.rp) for (const k in e.rp) if (e.rp[k].st === 1) slow = .25; // planting its feet while winding up
+ if (e.twin === 'blue') {
+  e.sg = e.sg || 1; if (Math.sin(R.t * .7 + e.x) > .98) e.sg = -e.sg;
+  if (d < 150) return [-ux, -uy, sp * slow];
+  if (d > 235) return [ux, uy, sp * .8 * slow];
+  return [-uy * e.sg, ux * e.sg, sp * .7 * slow];
+ }
+ if (d < 110) return [-uy, ux, sp * .6 * slow];
+ return [ux, uy, sp * slow];
+}
+function startSplit(e) {
+ e.splitT = RACE.splitTime; e.inv = 99; e.burn = 0; e.dash = null; e.rp = null;
+ R.eb = []; R.tg = R.tg.filter(z => !z.own2);
+ R.shake = 10; R.flash = .3;
+ R.banner = { t: 1.8, s: 'PROCESS FORK: RACE CONDITION SPLITS' };
+ snd(90, .9, 'sawtooth', .08, -30);
+ ring(e.x, e.y, 24, '#ffffff', .5);
+}
+function finishSplit(e) {
+ const hp2 = Math.max(1, Math.round((e.max0 || e.max) * RACE.twinHp));
+ const arena = G.cfg.arena, D = 38;
+ let bx = e.x + D, rx = e.x - D;
+ if (wallHit(arena, bx, e.y, e.r)) bx = e.x;
+ if (wallHit(arena, rx, e.y, e.r)) rx = e.x;
+ Object.assign(e, { twin: 'red', c: RACE.red, hp: hp2, max: hp2, inv: 0, splitT: 0, x: rx, sp: 46, rp: { red: rProc('red') }, dash: null });
+ e.rp.red.cd = 1.2;
+ const b = spawnE('chaser', bx, e.y);
+ Object.assign(b, { boss: 1, g: e.g, c: RACE.blue, hp: hp2, max: hp2, sp: 38, r: e.r, dmg: 14, ph: 0, pt: {}, beh: 'boss', bd0: e.bd0, gt: 0, projShape: 'race', race: 1, twin: 'blue', inv: 0, rp: { blue: rProc('blue') }, tm: 9 });
+ b.rp.blue.cd = 1.8;
+ R.race.red = e; R.race.blue = b; R.race.split = 1; R.race.lastRes = R.t;
+ R.banner = { t: 1.6, s: 'RED + BLUE: DEFEAT BOTH HOSTS' };
+ burst(e.x, e.y, RACE.red, 18, 200); burst(b.x, b.y, RACE.blue, 18, 200);
+ ring(e.x, e.y, 40, RACE.red, .4); ring(b.x, b.y, 40, RACE.blue, .4);
+ snd(140, .4, 'square', .06, 120);
+}
+
 function updEn(dt) {
  const p = R.p, arena = G.cfg.arena;
  for (const e of R.en) e.prot = 1;
@@ -989,6 +1105,7 @@ function updEn(dt) {
   const e = R.en[n];
   if (e.dead) continue;
   e.fl -= dt; e.oc -= dt; e.vuln -= dt; if (e.shT > 0) e.shT -= dt;
+  if (e.inv > 0) e.burn = 0;
   if (e.burn > 0) {
    e.burn -= dt;
    const burnDmg = e.bd * dt;
@@ -1051,6 +1168,7 @@ function updEn(dt) {
     }
     break;
   }
+  if (e.race) { const rm = raceMove(e, ux, uy, d, sp); mx = rm[0]; my = rm[1]; sp = rm[2]; }
   const kd = Math.min(1, dt * 6);
   if (e.ghost || (e.beh === 'dash' && e.st === 2)) {
    e.x = cl(e.x + (mx * sp + e.kx) * dt, e.r, W - e.r);
@@ -1257,6 +1375,30 @@ function fireBlob(ctx, r, seed = 0) {
  pts.forEach(([sx,sy],i)=>{ const w=1+.035*Math.sin(seed+i*2.4), px=sx*r*w, py=sy*r*w; if(!i)ctx.moveTo(px,py); else ctx.lineTo(px,py); });
  ctx.closePath();
 }
+// Race Condition, merged phase: one figure made of overlapping red and blue bodies; mitosis animation when splitting.
+function drawMerged(x, e) {
+ const t = R.t, r = e.r;
+ const body = (cx, cy, col, a) => {
+  x.save();
+  x.globalAlpha = .22 * a; x.fillStyle = col; x.beginPath(); x.arc(cx, cy, r, 0, 7); x.fill();
+  x.globalAlpha = a; x.strokeStyle = e.fl > 0 ? '#fff' : col; x.lineWidth = 2; x.beginPath(); x.arc(cx, cy, r, 0, 7); x.stroke();
+  x.font = `700 ${Math.round(r * 1.5)}px 'JetBrains Mono',monospace`; x.fillStyle = e.fl > 0 ? '#fff' : col; x.fillText(e.g, cx, cy + 1);
+  x.restore();
+ };
+ if (e.splitT > 0) {
+  const s = 1 - e.splitT / RACE.splitTime, ease = s * s * (3 - 2 * s), D = 38 * ease;
+  x.save();
+  x.globalAlpha = .6 * (1 - ease); x.strokeStyle = '#ffffff'; x.lineWidth = Math.max(.5, r * 1.6 * (1 - ease)); x.lineCap = 'round';
+  x.beginPath(); x.moveTo(e.x - D, e.y); x.lineTo(e.x + D, e.y); x.stroke();
+  x.restore();
+  body(e.x - D, e.y, RACE.red, 1); body(e.x + D, e.y, RACE.blue, 1);
+  x.save(); x.globalAlpha = (1 - s) * .5; x.strokeStyle = '#ffffff'; x.lineWidth = 2; x.beginPath(); x.arc(e.x, e.y, r + 6 + 30 * s, 0, 7); x.stroke(); x.restore();
+  return;
+ }
+ const o = 3 + Math.sin(t * 9) * 1.6, j = Math.sin(t * 23) * 1.1;
+ body(e.x - o * 2.4, e.y - j, RACE.red, .25); body(e.x + o * 2.4, e.y + j, RACE.blue, .25); // afterimages
+ body(e.x - o, e.y - j * .5, RACE.red, 1); body(e.x + o, e.y + j * .5, RACE.blue, 1);
+}
 function drawEnemyTelegraphs(ctx, e) {
  const c = e.c || '#fff', now = R.t;
  ctx.save();
@@ -1309,6 +1451,33 @@ function drawEnemyTelegraphs(ctx, e) {
   ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 7 + pulse * 3, 0, 7); ctx.stroke();
   ctx.globalAlpha = .5; ctx.lineWidth = 1.2;
   ctx.beginPath(); ctx.moveTo(e.x - 10, e.y - 10); ctx.lineTo(e.x + 10, e.y + 10); ctx.stroke();
+ }
+
+ // Race Condition: each process shows its tell. Red = dash lane (tracks you, then locks); blue = aim lines (tracks, then locks).
+ if (e.race && e.rp && !e.dead && !(e.splitT > 0)) {
+  ctx.globalCompositeOperation = 'source-over'; // normal blending so the tells read on light arenas too
+  for (const k in e.rp) {
+   const pr = e.rp[k];
+   if (pr.st !== 1) continue;
+   const lock = pr.lock, col = k === 'red' ? RACE.red : RACE.blue;
+   ctx.strokeStyle = col; ctx.fillStyle = col;
+   if (k === 'red') {
+    const L = RACE.dash.sp * RACE.dash.t + e.r, dx = Math.cos(pr.ang), dy = Math.sin(pr.ang), nx = -dy * e.r, ny = dx * e.r;
+    ctx.globalAlpha = lock ? .42 : .16 + .1 * Math.sin(now * 14);
+    ctx.beginPath(); ctx.moveTo(e.x + nx, e.y + ny); ctx.lineTo(e.x + dx * L + nx, e.y + dy * L + ny); ctx.lineTo(e.x + dx * L - nx, e.y + dy * L - ny); ctx.lineTo(e.x - nx, e.y - ny); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = lock ? 1 : .55; ctx.lineWidth = lock ? 2.5 : 1.4;
+    ctx.beginPath(); ctx.moveTo(e.x + nx, e.y + ny); ctx.lineTo(e.x + dx * L + nx, e.y + dy * L + ny); ctx.moveTo(e.x - nx, e.y - ny); ctx.lineTo(e.x + dx * L - nx, e.y + dy * L - ny); ctx.stroke();
+   } else if (pr.variant === 1) {
+    const C = RACE.shoot;
+    ctx.globalAlpha = lock ? .85 : .3; ctx.lineWidth = lock ? 2 : 1.2;
+    for (let i = 0; i < C.n; i++) {
+     const an = pr.ang + (i - (C.n - 1) / 2) * C.spread;
+     ctx.beginPath(); ctx.moveTo(e.x + Math.cos(an) * (e.r + 4), e.y + Math.sin(an) * (e.r + 4)); ctx.lineTo(e.x + Math.cos(an) * 170, e.y + Math.sin(an) * 170); ctx.stroke();
+    }
+   }
+   const prog = 1 - Math.max(0, pr.t) / (k === 'red' ? RACE.dash.tele : RACE.shoot.tele);
+   ctx.globalAlpha = .5; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 4 + 16 * (1 - prog), 0, 7); ctx.stroke();
+  }
  }
 
  // Runtime Error boss: connected destination graph while teleport is primed.
@@ -1398,6 +1567,10 @@ function drawProjectile(ctx, q, enemy = false) {
  } else if (shape === 'runtime') {
   poly(ctx, r * 1.15, 3, -Math.PI / 2, .02); ctx.fill(); ctx.stroke();
   ctx.shadowBlur = 0; ctx.fillStyle = '#eadcff'; poly(ctx, r*.52, 3, -Math.PI/2, 0); ctx.fill();
+ } else if (shape === 'hex') {
+  const sp6 = (R?.t || 0) * 3 + q.x * .02;
+  poly(ctx, r * 1.2, 6, sp6, 0); ctx.fill(); ctx.stroke();
+  ctx.shadowBlur = 0; ctx.fillStyle = lightenHex(col, .6); poly(ctx, r * .55, 6, -sp6, 0); ctx.fill();
  } else if (shape === 'leak') {
   poly(ctx, r * 1.17, 7, -.25, .09); ctx.fill(); ctx.stroke();
   ctx.shadowBlur = 0; ctx.fillStyle = '#c8f6a0'; fireBlob(ctx, r*.52, q.x*.05); ctx.fill();
@@ -1673,6 +1846,8 @@ function draw(x) {
 
  for (const e of R.en) {
   drawEnemyTelegraphs(x, e);
+  if (e.race && e.twin === 'merged') drawMerged(x, e);
+  else {
   x.globalAlpha = e.ghost ? .12 : .25; x.fillStyle = e.c;
   x.beginPath(); x.arc(e.x, e.y, e.r, 0, 7); x.fill();
   x.globalAlpha = e.ghost ? .7 : 1; x.strokeStyle = e.fl > 0 ? '#fff' : e.c;
@@ -1680,6 +1855,7 @@ function draw(x) {
   x.font = `700 ${Math.round(e.r * 1.5)}px 'JetBrains Mono',monospace`;
   x.fillStyle = e.fl > 0 ? '#fff' : e.c;
   x.fillText(e.g, e.x, e.y + 1);
+  }
 
   // Clear, animated burn status: flames, glow, and an explicit BURN tag.
   if (e.burn > 0) {
@@ -1918,11 +2094,23 @@ function draw(x) {
  }
 
  const bs = R.en.find(e => e.boss);
- if (bs && bs.bd0) {
+ if (R.race && R.race.split && R.race.red) {
+  // Phase 2: two color-coded health bars, each with its own HP.
+  x.textAlign = 'center';
+  [[R.race.red, 150, 'RED'], [R.race.blue, 330, 'BLUE']].forEach(([b, bx, nm]) => {
+   const alive = !b.dead && b.hp > 0;
+   x.fillStyle = c.mu; x.fillRect(bx, 44, 160, 8);
+   x.fillStyle = alive ? b.c : '#5a5f70'; x.fillRect(bx, 44, 160 * Math.max(0, b.hp) / (b.max || 1), 8);
+   x.fillStyle = alive ? b.c : '#7d8498'; x.font = "700 10px 'JetBrains Mono',monospace";
+   x.fillText(alive ? nm + ' ' + Math.max(0, Math.ceil(b.hp)) + '/' + b.max : nm + ' TERMINATED', bx + 80, 64);
+  });
+  x.fillStyle = c.ink; x.font = "700 11px 'JetBrains Mono',monospace";
+  x.fillText('THE RACE CONDITION', 320, 78);
+ } else if (bs && bs.bd0) {
   x.textAlign = 'center';
   x.fillStyle = c.mu;
   x.fillRect(150, 44, 340, 8);
-  x.fillStyle = bs.c;
+  if (bs.race) { const gr = x.createLinearGradient(150, 0, 490, 0); gr.addColorStop(0, RACE.red); gr.addColorStop(1, RACE.blue); x.fillStyle = gr; } else x.fillStyle = bs.c;
   x.fillRect(150, 44, 340 * Math.max(0, bs.hp) / (bs.max || 1), 8);
   x.fillStyle = c.ink;
   x.font = "700 11px 'JetBrains Mono',monospace";
@@ -2116,13 +2304,15 @@ function beginBossLoad(bossKey, after) {
  const style = {
   segfault: { bg: '#0b0710', accent: '#b56cff', hi: '#ead5ff', ok: '#c99cff', dim: '#6f4d8a', glow: 'rgba(180,100,255,.16)' },
   leak: { bg: '#07100c', accent: '#55e6a5', hi: '#caffea', ok: '#8ff0c3', dim: '#477d68', glow: 'rgba(70,220,150,.15)' },
-  runtime: { bg: '#120705', accent: '#ff6a55', hi: '#ffd0c8', ok: '#ff9c8b', dim: '#8f4d43', glow: 'rgba(255,90,70,.17)' }
+  runtime: { bg: '#120705', accent: '#ff6a55', hi: '#ffd0c8', ok: '#ff9c8b', dim: '#8f4d43', glow: 'rgba(255,90,70,.17)' },
+  race: { bg: '#0a0812', accent: '#7a8cff', hi: '#e3e6ff', ok: '#9fb0ff', dim: '#56608f', glow: 'rgba(120,120,255,.16)' }
  }[bossKey] || { bg: '#080a10', accent: '#7aa7ff', hi: '#d8e5ff', ok: '#a9c6ff', dim: '#536b8f', glow: 'rgba(90,140,255,.14)' };
- const names = { segfault: 'SEGFAULT', leak: 'MEMORY LEAK', runtime: 'RUNTIME ERROR' };
+ const names = { segfault: 'SEGFAULT', leak: 'MEMORY LEAK', runtime: 'RUNTIME ERROR', race: 'RACE CONDITION' };
  const refs = {
   segfault: ['invalidating stack frames', 'scanning pointer boundaries', 'isolating segmentation fault'],
   leak: ['tracing retained allocations', 'walking unreachable references', 'checking heap pressure'],
-  runtime: ['entering final execution path', 'validating syscall boundary', 'locking runtime state']
+  runtime: ['entering final execution path', 'validating syscall boundary', 'locking runtime state'],
+  race: ['scheduling competing threads', 'resolving write order', 'locking shared state']
  };
  const r = refs[bossKey] || refs.segfault;
  const A = $('#app');

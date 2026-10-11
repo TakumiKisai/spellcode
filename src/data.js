@@ -13,6 +13,7 @@ export const MUSIC = {
  segfault:{file:'segfault.mp3',gain:1,start:.1,end:197.09},
  leak:{file:'memory_leak.mp3',gain:1,start:.38,end:238.29},
  runtime:{file:'runtime_error.mp3',gain:1,start:.77,end:295.67},
+ race:{file:'race_condition.mp3',gain:1,start:0}, // loops the whole track; add end:<seconds> or start:<seconds> to trim silence
  title:{file:'localhost.mp3',gain:1,start:0,end:53.43},
  overtime:{file:'overtime.ogg',gain:1,start:0,end:61.3},
  gameover:{file:'game_over.mp3',gain:1,start:1.21,end:189.21},
@@ -165,8 +166,20 @@ export const ARENAS = {
  hot:{n:'HOT ZONE',w:[[300,110,40,170]],hz:[[110,150,100,100,'lava'],[430,150,100,100,'lava']]}
 };
 
+// Race Condition boss tuning (all values are easy to adjust for balancing).
+export const RACE = {
+ splitAt: .5,      // merged phase ends at this fraction of Phase 1 max HP
+ twinHp: .5,       // each twin's max HP, as a fraction of the original Phase 1 max HP
+ splitTime: 1.7,   // mitosis animation length (the boss is protected meanwhile)
+ gap: .85,         // minimum seconds between the two processes' damaging moments
+ twinCd: .85,      // post-split attack cooldown multiplier (lower = faster)
+ red: '#ff4d5a', blue: '#4d8dff',
+ dash: { cd: [2.4, 3.6], tele: .95, lock: .38, t: .34, sp: 430, dmg: 14 },
+ shoot: { cd: [3.2, 4.6], tele: 1.05, lock: .4, n: 5, spread: .2, sp: 135, dmg: 8, zones: 2, zr: 50, zdmg: 12 }
+};
 export const BOSSES = {
  segfault:{n:'THE SEGFAULT',hp:720,r:24,sp:28,arena:'void',g:'Ж',c:'#ff5c7a',i:'Crashes zones of the arena. Exposed after each crash.',ph:[{ring:3.4,zone:5},{ring:2.8,zone:3.4,summon:8},{ring:2.2,zone:2.5,aim:2.8,summon:6}]},
  leak:{n:'THE MEMORY LEAK',hp:780,r:22,sp:24,arena:'pillars',g:'Ө',c:'#7ddc6f',grow:1,i:'Grows stronger every second. Its shots and minions ignore walls, so you cannot hide.',ph:[{aim:2.4,summon:6},{aim:1.9,ring:4.5,summon:5},{aim:1.5,ring:3.2,summon:4}]},
- runtime:{n:'THE RUNTIME ERROR',hp:1750,r:22,sp:22,arena:'grid',g:'Ξ',c:'#b48cff',i:'Marks where it will land, then teleports next to you. Exposed after each jump.',ph:[{tp:4.2,aim:2.4,zone:4.4},{tp:3.2,aim:1.9,zone:3,ring:4.4},{tp:2.5,aim:1.5,zone:2.2,ring:3.2,summon:6.5}]}
+ runtime:{n:'THE RUNTIME ERROR',hp:1750,r:22,sp:22,arena:'grid',g:'Ξ',c:'#b48cff',i:'Marks where it will land, then teleports next to you. Exposed after each jump.',ph:[{tp:4.2,aim:2.4,zone:4.4},{tp:3.2,aim:1.9,zone:3,ring:4.4},{tp:2.5,aim:1.5,zone:2.2,ring:3.2,summon:6.5}]},
+ race:{n:'THE RACE CONDITION',hp:900,r:22,sp:28,arena:'cross',g:'‖',c:'#ff4d5a',race:1,i:'Two processes race to hit you first. Splits into a red and a blue Host at half health: defeat both.'}
 };
