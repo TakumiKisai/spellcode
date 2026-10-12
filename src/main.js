@@ -874,6 +874,9 @@ function hitE(e, d, a, src, np) {
  let v = d * (crit ? (sc ? 1 + a.crit : 2) : 1) * e.prot * (e.vuln > 0 ? 1.5 : 1);
  const arm = Math.max(0, (e.boss ? 6 : e.k === 'tank' ? 6 : e.elite ? 4 : 0) - (e.shT > 0 ? (e.shred || 0) : 0));
  if (arm) v = Math.max(v * .25, v - arm);
+ if (e.twin === 'red' || e.twin === 'blue') R.race.lastHit = e.twin;
+ const LK = R.race && R.race.lock;
+ if (LK && LK.state === 'active' && LK.holder === e) { LK.dur -= v; v *= RACE.mutex.reduce; if (LK.dur <= 0) shatterLock(LK, e); }
  e.hp -= v; e.fl = .08;
  recordDamage(a, v);
  if (a.burn) e.burnCard = a._cardId;
@@ -904,7 +907,11 @@ function kill(e, np) {
   if (partner) {
    // One twin down: only its own shots and zones go away; the other Host keeps fighting.
    R.eb = R.eb.filter(b => b.own !== e.twin); R.tg = R.tg.filter(z => z.own2 !== e.twin);
-   R.shake = 12; R.banner = { t: 1.6, s: (e.twin === 'red' ? 'RED' : 'BLUE') + ' PROCESS TERMINATED' };
+   // Thread merge: the survivor absorbs the dead twin's process, gets faster, and the lock + tether vanish.
+   partner.merged = 1; partner.sp *= RACE.merge.speed;
+   if (partner.rp && !partner.rp[e.twin]) { partner.rp[e.twin] = rProc(e.twin); partner.rp[e.twin].cd = 1.6; }
+   R.race.lock = null; R.race.merged = 1;
+   R.shake = 12; R.banner = { t: 2, s: 'THREAD MERGE: ' + (e.twin === 'red' ? 'RED' : 'BLUE') + ' PROCESS ABSORBED' };
    snd(100, .5, 'sawtooth', .08, -40);
   } else {
    R.bossDead = 1;
@@ -996,13 +1003,86 @@ function bossAI(e, dt, d) {
 }
 
 
-// ===== THE RACE CONDITION (sector 3 boss): two competing attack processes, then a split into two Hosts =====
+// ===== THE RACE CONDITION (sector 3 boss): two competing attack processes, a mutex lock, a tether, then a split / thread merge =====
 const rrange = a => a[0] + Math.random() * (a[1] - a[0]);
 function rProc(kind) {
  const C = kind === 'red' ? RACE.dash : RACE.shoot;
- return { kind, st: 0, cd: rrange(C.cd) * (kind === 'blue' ? 1.15 : 1), t: 0, ang: 0, lock: false, variant: 0, alt: 0 };
+ return { kind, st: 0, cd: rrange(C.cd) * (kind === 'blue' ? 1.15 : 1), t: 0, T: 1, L: .3, ang: 0, lock: false, variant: 0, last: -1 };
+}
+const cdMul = e => (e.twin === 'merged' ? 1 : RACE.twinCd) * (e.merged ? RACE.merge.cd : 1);
+function leadPos() {
+ const p = R.p, v = R.race.v || { x: 0, y: 0 };
+ return { x: cl(p.x + v.x * RACE.lead, 20, W - 20), y: cl(p.y + v.y * RACE.lead, 20, H - 20) };
+}
+function redLane() {
+ for (const x of R.en) if (x.race && !x.dead && x.rp && x.rp.red && x.rp.red.st === 1) return { e: x, ang: x.rp.red.ang };
+ return null;
+}
+// Blue's marker placement: one where you're heading, one beside it on the side you'd dodge toward (the other side stays open).
+function strikeZones() {
+ const p = R.p, tg = leadPos(), ln = redLane(), out = [[tg.x, tg.y]];
+ if (ln) {
+  const nx = -Math.sin(ln.ang), ny = Math.cos(ln.ang), side = Math.sign((p.x - ln.e.x) * nx + (p.y - ln.e.y) * ny) || 1;
+  out.push([tg.x + nx * side * RACE.pincer, tg.y + ny * side * RACE.pincer]);
+ } else {
+  const an = Math.random() * 6.283;
+  out.push([tg.x + Math.cos(an) * 85, tg.y + Math.sin(an) * 85]);
+ }
+ return out.map(([x, y]) => [cl(x, 36, W - 36), cl(y, 36, H - 36)]);
+}
+function segDist(px, py, ax, ay, bx, by) {
+ const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy || 1, t = cl(((px - ax) * dx + (py - ay) * dy) / l2, 0, 1);
+ return Math.hypot(px - (ax + dx * t), py - (ay + dy * t));
+}
+function raceCollideAt(x, y, r) {
+ for (const z of R.tg) {
+  if (!z.own2 || z.collided) continue;
+  if (Math.hypot(z.x - x, z.y - y) < z.r + r + 6) {
+   z.collided = 1; z.r *= RACE.collide.grow; z.dmg *= RACE.collide.dmg; z.c = '#c77dff';
+   burst(z.x, z.y, '#c77dff', 8, 110); txt(z.x, z.y - z.r, 'COLLISION', '#e0b3ff', 11); snd(300, .1, 'square', .04, -100);
+  }
+ }
+}
+function shatterLock(L, e) {
+ L.state = 'broken'; L.cd = RACE.mutex.cd; L.broke = e;
+ burst(e.x, e.y, '#9fe8ff', 22, 230); ring(e.x, e.y, 30, '#9fe8ff', .4);
+ txt(e.x, e.y - e.r - 8, 'LOCK SHATTERED', '#9fe8ff', 13); R.shake = 8; snd(180, .35, 'sawtooth', .07, -90);
+}
+// Runs once per frame: player velocity (for lead aim), tether, mutex lock timers.
+function raceGlobal(dt) {
+ const r0 = R.race, p = R.p;
+ if (r0.pp && dt > 0) {
+  let vx = (p.x - r0.pp.x) / dt, vy = (p.y - r0.pp.y) / dt;
+  const m = Math.hypot(vx, vy); if (m > 380) { vx *= 380 / m; vy *= 380 / m; }
+  r0.v = { x: (r0.v ? r0.v.x : 0) * .7 + vx * .3, y: (r0.v ? r0.v.y : 0) * .7 + vy * .3 };
+ }
+ r0.pp = { x: p.x, y: p.y };
+ if (!r0.split) return;
+ const a = r0.red, b = r0.blue, both = a && b && !a.dead && !b.dead;
+ if (!both) { r0.lock = null; return; }
+ r0.tetherT = Math.max(0, (r0.tetherT == null ? RACE.tether.arm : r0.tetherT) - dt);
+ if (r0.tetherT <= 0 && !a.dash && !b.dash && !R.end && R.t - (r0.tcd || -9) > RACE.tether.cd && segDist(p.x, p.y, a.x, a.y, b.x, b.y) < 9 + RACE.tether.w + 2) {
+  hurt(RACE.tether.dmg, a); r0.tcd = R.t;
+ }
+ const L = r0.lock;
+ if (!L) return;
+ if (L.state === 'active') {
+  L.t -= dt;
+  if (L.t <= 0) { L.from = L.holder; L.holder = L.holder === a ? b : a; L.state = 'transit'; L.tr = RACE.mutex.transit; L.t = RACE.mutex.handover; snd(240, .2, 'triangle', .04, 80); }
+ } else if (L.state === 'transit') {
+  L.tr -= dt; if (L.tr <= 0) L.state = 'active';
+ } else if (L.state === 'broken') {
+  L.cd -= dt;
+  if (L.cd <= 0) {
+   // re-forms stronger, on the twin that wasn't hit last
+   L.lvl++; L.max = Math.round(L.base * Math.pow(RACE.mutex.grow, L.lvl)); L.dur = L.max;
+   L.holder = r0.lastHit === 'red' ? b : a; L.state = 'active'; L.t = RACE.mutex.handover;
+   ring(L.holder.x, L.holder.y, 28, '#9fe8ff', .4); snd(420, .2, 'triangle', .05, 120);
+  }
+ }
 }
 function raceAI(e, dt, d) {
+ if (R.race && R.race.tick !== R.t) { R.race.tick = R.t; raceGlobal(dt); }
  if (e.splitT > 0) {
   // mitosis: boss is frozen and protected until the animation ends
   e.splitT -= dt; e.dash = null;
@@ -1014,46 +1094,53 @@ function raceAI(e, dt, d) {
  for (const k in e.rp) raceProc(e, e.rp[k], dt);
 }
 function raceProc(e, pr, dt) {
- const red = pr.kind === 'red', C = red ? RACE.dash : RACE.shoot, p = R.p, twin = e.twin !== 'merged';
+ const red = pr.kind === 'red', C = red ? RACE.dash : RACE.shoot, p = R.p;
  if (pr.st === 0) {
   pr.cd -= dt;
   if (pr.cd > 0) return;
-  pr.st = 1; pr.t = C.tele; pr.lock = false; pr.ang = Math.atan2(p.y - e.y, p.x - e.x);
-  if (!red) {
-   pr.alt ^= 1; pr.variant = pr.alt; // alternates: spread of shots / marked-area strike
-   if (pr.variant === 0) {
-    // marked-area strike: the zone markers ARE the telegraph and detonate when the wind-up ends
-    for (let i = 0; i < C.zones; i++) {
-     const x = i ? cl(p.x + ri(140) - 70, 40, 600) : p.x, y = i ? cl(p.y + ri(140) - 70, 40, 360) : p.y;
-     R.tg.push({ x, y, r: C.zr, t: C.tele, max: C.tele, dmg: C.zdmg, own: 'e', c: RACE.blue, own2: e.twin });
-    }
-   }
+  pr.st = 1; pr.lock = false;
+  if (red) {
+   // red hunts: it goes for where you ARE
+   pr.T = C.tele; pr.L = C.lock; pr.ang = Math.atan2(p.y - e.y, p.x - e.x);
+  } else {
+   // blue zones: it aims where you're HEADING. Variants: 0 marked strikes, 1 shotgun spread, 2 sniper
+   const opts = [0, 1, 2].filter(v => v !== pr.last);
+   pr.variant = opts[Math.floor(Math.random() * opts.length)]; pr.last = pr.variant;
+   if (pr.variant === 2 && R.t - R.race.lastRes < RACE.gap) { pr.st = 0; pr.cd = .25; pr.last = -1; return; } // the fast shot waits for a clear window before its tell starts
+   pr.T = pr.variant === 2 ? RACE.snipe.tele : C.tele; pr.L = pr.variant === 2 ? RACE.snipe.lock : C.lock;
+   const lp = leadPos(); pr.ang = Math.atan2(lp.y - e.y, lp.x - e.x);
+   if (pr.variant === 0) for (const [x, y] of strikeZones()) R.tg.push({ x, y, r: C.zr, t: pr.T, max: pr.T, dmg: C.zdmg, own: 'e', c: RACE.blue, own2: e.twin });
   }
+  pr.t = pr.T;
   snd(red ? 260 : 200, .12, 'triangle', .04, 60);
  } else if (pr.st === 1) {
   pr.t -= dt;
-  if (pr.t > C.lock) pr.ang = Math.atan2(p.y - e.y, p.x - e.x); // the aim follows you, then locks for the final moment
+  if (pr.t > pr.L) { const tp = red ? p : leadPos(); pr.ang = Math.atan2(tp.y - e.y, tp.x - e.x); } // aim tracks, then locks for the final moment
   else pr.lock = true;
   if (pr.t > 0) return;
-  if (!red && pr.variant === 0) { pr.st = 0; pr.cd = rrange(C.cd) * (twin ? RACE.twinCd : 1); R.race.lastRes = R.t; return; }
+  if (!red && pr.variant === 0) { pr.st = 0; pr.cd = rrange(C.cd) * cdMul(e); R.race.lastRes = R.t; return; }
   // order rule: two damaging moments never land closer than RACE.gap apart, so there's always a reaction window
-  if (R.t - R.race.lastRes < RACE.gap) { pr.t = .05; return; }
+  if (!(!red && pr.variant === 2) && R.t - R.race.lastRes < RACE.gap) { pr.t = .05; return; }
   R.race.lastRes = R.t;
   if (red) {
    e.dash = { dx: Math.cos(pr.ang), dy: Math.sin(pr.ang), sp: C.sp };
    pr.st = 2; pr.t = C.t;
+   for (let s = 0; s <= C.sp * C.t; s += 24) raceCollideAt(e.x + e.dash.dx * s, e.y + e.dash.dy * s, e.r);
    burst(e.x, e.y, RACE.red, 10, 140); snd(220, .15, 'sawtooth', .05, 120);
   } else {
-   for (let i = 0; i < C.n; i++) {
-    ebul(e.x, e.y, pr.ang + (i - (C.n - 1) / 2) * C.spread, C.sp, C.dmg, RACE.blue, 'hex');
-    R.eb[R.eb.length - 1].own = e.twin;
+   if (pr.variant === 1) {
+    for (let i = 0; i < C.n; i++) { ebul(e.x, e.y, pr.ang + (i - (C.n - 1) / 2) * C.spread, C.sp, C.dmg, RACE.blue, 'hex'); R.eb[R.eb.length - 1].own = e.twin; }
+    snd(170, .2, 'triangle', .05, -60);
+   } else {
+    ebul(e.x, e.y, pr.ang, RACE.snipe.sp, RACE.snipe.dmg, RACE.blue, 'snipe'); R.eb[R.eb.length - 1].own = e.twin;
+    burst(e.x, e.y, RACE.blue, 6, 160); snd(900, .08, 'square', .05, -300);
    }
-   snd(170, .2, 'triangle', .05, -60);
-   pr.st = 0; pr.cd = rrange(C.cd) * (twin ? RACE.twinCd : 1);
+   pr.st = 0; pr.cd = rrange(C.cd) * cdMul(e);
   }
  } else if (pr.st === 2) {
   pr.t -= dt;
-  if (pr.t <= 0) { e.dash = null; pr.st = 0; pr.cd = rrange(C.cd) * (twin ? RACE.twinCd : 1); R.race.lastRes = R.t; }
+  raceCollideAt(e.x, e.y, e.r);
+  if (pr.t <= 0) { e.dash = null; pr.st = 0; pr.cd = rrange(C.cd) * cdMul(e); R.race.lastRes = R.t; }
  }
 }
 function raceMove(e, ux, uy, d, sp) {
@@ -1089,8 +1176,10 @@ function finishSplit(e) {
  const b = spawnE('chaser', bx, e.y);
  Object.assign(b, { boss: 1, g: e.g, c: RACE.blue, hp: hp2, max: hp2, sp: 38, r: e.r, dmg: 14, ph: 0, pt: {}, beh: 'boss', bd0: e.bd0, gt: 0, projShape: 'race', race: 1, twin: 'blue', inv: 0, rp: { blue: rProc('blue') }, tm: 9 });
  b.rp.blue.cd = 1.8;
- R.race.red = e; R.race.blue = b; R.race.split = 1; R.race.lastRes = R.t;
- R.banner = { t: 1.6, s: 'RED + BLUE: DEFEAT BOTH HOSTS' };
+ R.race.red = e; R.race.blue = b; R.race.split = 1; R.race.lastRes = R.t; R.race.tetherT = RACE.tether.arm;
+ const base = Math.round(hp2 * RACE.mutex.dur);
+ R.race.lock = { holder: Math.random() < .5 ? e : b, base, max: base, dur: base, lvl: 0, t: RACE.mutex.handover, cd: 0, state: 'active', tr: 0, from: null };
+ R.banner = { t: 1.8, s: 'BREAK THE LOCK, DEFEAT BOTH HOSTS' };
  burst(e.x, e.y, RACE.red, 18, 200); burst(b.x, b.y, RACE.blue, 18, 200);
  ring(e.x, e.y, 40, RACE.red, .4); ring(b.x, b.y, 40, RACE.blue, .4);
  snd(140, .4, 'square', .06, 120);
@@ -1238,9 +1327,13 @@ function updPr(dt) {
 function updMisc(dt) {
  const p = R.p, arena = G.cfg.arena;
  for (const b of R.eb) {
-  b.x += b.vx * dt; b.y += b.vy * dt; b.l -= dt;
-  if (b.pw ? (b.x < -5 || b.y < -5 || b.x > W + 5 || b.y > H + 5) : wallHit(arena, b.x, b.y, 3)) b.l = 0;
-  if (Math.hypot(b.x - p.x, b.y - p.y) < 9 && p.inv <= 0) { b.l = 0; hurt(b.dmg, b); }
+  const n = Math.max(1, Math.ceil(Math.hypot(b.vx, b.vy) * dt / 8)), sx = b.vx * dt / n, sy = b.vy * dt / n;
+  b.l -= dt;
+  for (let i = 0; i < n; i++) {
+   b.x += sx; b.y += sy;
+   if (b.pw ? (b.x < -5 || b.y < -5 || b.x > W + 5 || b.y > H + 5) : wallHit(arena, b.x, b.y, 3)) { b.l = 0; break; }
+   if (Math.hypot(b.x - p.x, b.y - p.y) < 9 && p.inv <= 0) { b.l = 0; hurt(b.dmg, b); break; }
+  }
  }
  R.eb = R.eb.filter(b => b.l > 0);
  for (const t of R.tg) {
@@ -1399,6 +1492,56 @@ function drawMerged(x, e) {
  body(e.x - o * 2.4, e.y - j, RACE.red, .25); body(e.x + o * 2.4, e.y + j, RACE.blue, .25); // afterimages
  body(e.x - o, e.y - j * .5, RACE.red, 1); body(e.x + o, e.y + j * .5, RACE.blue, 1);
 }
+function drawLockRing(x, e) {
+ const L = R.race.lock, frac = Math.max(0, L.dur) / (L.max || 1);
+ x.save();
+ x.strokeStyle = '#9fe8ff'; x.lineWidth = 2.2; x.globalAlpha = .9; x.shadowColor = '#9fe8ff'; x.shadowBlur = 8;
+ poly(x, e.r + 8, 6, R.t * 1.2, 0); x.stroke();
+ x.shadowBlur = 0; x.strokeStyle = '#e8fbff'; x.lineWidth = 3; x.globalAlpha = .95;
+ x.beginPath(); x.arc(e.x, e.y, e.r + 14, -Math.PI / 2, -Math.PI / 2 + 6.283 * frac); x.stroke();
+ x.restore();
+}
+function drawRaceLinks(x) {
+ const r0 = R.race;
+ if (!r0 || !r0.split) return;
+ const a = r0.red, b = r0.blue;
+ if (!a || !b || a.dead || b.dead) return;
+ const prog = 1 - Math.min(1, (r0.tetherT || 0) / RACE.tether.arm), dashing = !!(a.dash || b.dash), live = prog >= 1 && !dashing;
+ const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len, nx = -uy, ny = ux;
+ const qn = Math.floor(R.t * 28), rnd = i => { const v = Math.sin(i * 12.9898 + qn * 78.233) * 43758.5453; return v - Math.floor(v); };
+ const pt = (u, amp) => { const w = Math.sin(Math.PI * u) * amp * (rnd(Math.round(u * 60)) * 2 - 1); return [a.x + dx * u + nx * w, a.y + dy * u + ny * w]; };
+ x.save(); x.lineCap = 'round'; x.lineJoin = 'round';
+ if (live) {
+  // live electric tripwire: crackling arc, danger field, forks and sparks, flaring pylons on both Hosts
+  x.globalAlpha = .08; x.strokeStyle = '#b36bff'; x.lineWidth = 26; x.beginPath(); x.moveTo(a.x, a.y); x.lineTo(b.x, b.y); x.stroke();
+  const seg = Math.max(6, Math.round(len / 14));
+  const path = () => { x.beginPath(); x.moveTo(a.x, a.y); for (let i = 1; i < seg; i++) { const p = pt(i / seg, 6); x.lineTo(p[0], p[1]); } x.lineTo(b.x, b.y); };
+  x.shadowColor = '#b36bff'; x.shadowBlur = 10; x.globalAlpha = .55; x.strokeStyle = '#a566ff'; x.lineWidth = 6; path(); x.stroke();
+  x.shadowBlur = 0; x.globalAlpha = .95; x.strokeStyle = '#e2c4ff'; x.lineWidth = 2.6; path(); x.stroke();
+  x.strokeStyle = '#ffffff'; x.lineWidth = 1.1; path(); x.stroke();
+  x.strokeStyle = '#d9a6ff'; x.lineWidth = 1.2; x.globalAlpha = .8;
+  for (let k = 0; k < 3; k++) {
+   const u = .12 + rnd(k * 7 + 1) * .76, p = pt(u, 6), sd = rnd(k * 5 + 3) > .5 ? 1 : -1, l = 10 + rnd(k * 3 + 9) * 12;
+   x.beginPath(); x.moveTo(p[0], p[1]); x.lineTo(p[0] + nx * sd * l * .7 + ux * l * (rnd(k + 11) - .5), p[1] + ny * sd * l * .7 + uy * l * (rnd(k + 17) - .5)); x.stroke();
+  }
+  x.fillStyle = '#f1e2ff';
+  for (const e of [a, b]) { x.globalAlpha = .5 + .35 * rnd(e === a ? 1 : 2); x.beginPath(); x.arc(e.x, e.y, 4 + rnd(5) * 3, 0, 7); x.fill(); }
+ } else {
+  // charging / dormant tripwire: a dotted wire growing from both ends toward the middle, with a spark crawling along it
+  const u1 = dashing ? .5 : .5 * prog;
+  x.setLineDash([4, 6]); x.lineWidth = dashing ? 1.6 : 2.2; x.strokeStyle = dashing ? '#8a86c9' : '#a566ff'; x.globalAlpha = dashing ? .5 : .55 + .4 * prog;
+  x.beginPath(); x.moveTo(a.x, a.y); x.lineTo(a.x + dx * u1, a.y + dy * u1); x.moveTo(b.x, b.y); x.lineTo(b.x - dx * u1, b.y - dy * u1); x.stroke();
+  x.setLineDash([]);
+  const cu = (R.t * .9) % 1 * u1; x.globalAlpha = .95; x.shadowColor = '#b36bff'; x.shadowBlur = 8; x.fillStyle = '#ffffff';
+  x.beginPath(); x.arc(a.x + dx * cu, a.y + dy * cu, 2.8, 0, 7); x.fill(); x.beginPath(); x.arc(b.x - dx * cu, b.y - dy * cu, 2.8, 0, 7); x.fill(); x.shadowBlur = 0;
+ }
+ x.restore();
+ const L = r0.lock;
+ if (L && L.state === 'transit' && L.from) {
+  x.save(); x.globalAlpha = .75; x.strokeStyle = '#9fe8ff'; x.lineWidth = 2; x.setLineDash([4, 6]); x.lineDashOffset = -R.t * 80;
+  x.beginPath(); x.moveTo(L.from.x, L.from.y); x.lineTo(L.holder.x, L.holder.y); x.stroke(); x.restore();
+ }
+}
 function drawEnemyTelegraphs(ctx, e) {
  const c = e.c || '#fff', now = R.t;
  ctx.save();
@@ -1453,7 +1596,7 @@ function drawEnemyTelegraphs(ctx, e) {
   ctx.beginPath(); ctx.moveTo(e.x - 10, e.y - 10); ctx.lineTo(e.x + 10, e.y + 10); ctx.stroke();
  }
 
- // Race Condition: each process shows its tell. Red = dash lane (tracks you, then locks); blue = aim lines (tracks, then locks).
+ // Race Condition: each process shows its tell. Red = dash lane with >>> chevrons (tracks you, then locks); blue = aim lines / sniper line (aim tracks, then locks).
  if (e.race && e.rp && !e.dead && !(e.splitT > 0)) {
   ctx.globalCompositeOperation = 'source-over'; // normal blending so the tells read on light arenas too
   for (const k in e.rp) {
@@ -1462,11 +1605,19 @@ function drawEnemyTelegraphs(ctx, e) {
    const lock = pr.lock, col = k === 'red' ? RACE.red : RACE.blue;
    ctx.strokeStyle = col; ctx.fillStyle = col;
    if (k === 'red') {
-    const L = RACE.dash.sp * RACE.dash.t + e.r, dx = Math.cos(pr.ang), dy = Math.sin(pr.ang), nx = -dy * e.r, ny = dx * e.r;
-    ctx.globalAlpha = lock ? .42 : .16 + .1 * Math.sin(now * 14);
+    const L = RACE.dash.sp * RACE.dash.t + e.r, dx = Math.cos(pr.ang), dy = Math.sin(pr.ang), ux = -dy, uy = dx, nx = ux * e.r, ny = uy * e.r;
+    ctx.globalAlpha = lock ? .34 : .13 + .07 * Math.sin(now * 14);
     ctx.beginPath(); ctx.moveTo(e.x + nx, e.y + ny); ctx.lineTo(e.x + dx * L + nx, e.y + dy * L + ny); ctx.lineTo(e.x + dx * L - nx, e.y + dy * L - ny); ctx.lineTo(e.x - nx, e.y - ny); ctx.closePath(); ctx.fill();
     ctx.globalAlpha = lock ? 1 : .55; ctx.lineWidth = lock ? 2.5 : 1.4;
     ctx.beginPath(); ctx.moveTo(e.x + nx, e.y + ny); ctx.lineTo(e.x + dx * L + nx, e.y + dy * L + ny); ctx.moveTo(e.x - nx, e.y - ny); ctx.lineTo(e.x + dx * L - nx, e.y + dy * L - ny); ctx.stroke();
+    // >>> chevrons scrolling along the lane: loose and dim while tracking, solid, bright and fast once locked
+    ctx.strokeStyle = lock ? '#fff0f0' : col; ctx.lineWidth = lock ? 2.8 : 2; ctx.globalAlpha = lock ? .95 : .5; ctx.lineJoin = 'miter';
+    const gap = 24, off = (now * (lock ? 240 : 70)) % gap;
+    for (let sd = e.r + 4 + off; sd < L - 8; sd += gap) {
+     const cx = e.x + dx * sd, cy = e.y + dy * sd;
+     ctx.beginPath(); ctx.moveTo(cx - dx * 7 + ux * 10, cy - dy * 7 + uy * 10); ctx.lineTo(cx + dx * 7, cy + dy * 7); ctx.lineTo(cx - dx * 7 - ux * 10, cy - dy * 7 - uy * 10); ctx.stroke();
+    }
+    ctx.strokeStyle = col; ctx.fillStyle = col;
    } else if (pr.variant === 1) {
     const C = RACE.shoot;
     ctx.globalAlpha = lock ? .85 : .3; ctx.lineWidth = lock ? 2 : 1.2;
@@ -1474,8 +1625,14 @@ function drawEnemyTelegraphs(ctx, e) {
      const an = pr.ang + (i - (C.n - 1) / 2) * C.spread;
      ctx.beginPath(); ctx.moveTo(e.x + Math.cos(an) * (e.r + 4), e.y + Math.sin(an) * (e.r + 4)); ctx.lineTo(e.x + Math.cos(an) * 170, e.y + Math.sin(an) * 170); ctx.stroke();
     }
+   } else if (pr.variant === 2) {
+    // sniper: a thin line across the arena that locks almost at the last moment
+    const dx = Math.cos(pr.ang), dy = Math.sin(pr.ang);
+    if (lock) { ctx.globalAlpha = .28; ctx.lineWidth = 8; ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(e.x + dx * 760, e.y + dy * 760); ctx.stroke(); }
+    ctx.globalAlpha = lock ? 1 : .4; ctx.lineWidth = lock ? 1.8 : 1;
+    ctx.beginPath(); ctx.moveTo(e.x + dx * (e.r + 4), e.y + dy * (e.r + 4)); ctx.lineTo(e.x + dx * 760, e.y + dy * 760); ctx.stroke();
    }
-   const prog = 1 - Math.max(0, pr.t) / (k === 'red' ? RACE.dash.tele : RACE.shoot.tele);
+   const prog = 1 - Math.max(0, pr.t) / (pr.T || 1);
    ctx.globalAlpha = .5; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 4 + 16 * (1 - prog), 0, 7); ctx.stroke();
   }
  }
@@ -1567,6 +1724,14 @@ function drawProjectile(ctx, q, enemy = false) {
  } else if (shape === 'runtime') {
   poly(ctx, r * 1.15, 3, -Math.PI / 2, .02); ctx.fill(); ctx.stroke();
   ctx.shadowBlur = 0; ctx.fillStyle = '#eadcff'; poly(ctx, r*.52, 3, -Math.PI/2, 0); ctx.fill();
+ } else if (shape === 'snipe') {
+  // Sniper round: the bolt model (round core + highlight) in blue, with a long speed streak
+  const sg = ctx.createLinearGradient(0, 0, -r * 16, 0);
+  sg.addColorStop(0, 'rgba(130,175,255,.9)'); sg.addColorStop(1, 'rgba(130,175,255,0)');
+  ctx.strokeStyle = sg; ctx.lineWidth = r * 1.5; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-r * 16, 0); ctx.stroke();
+  ctx.strokeStyle = outline; ctx.lineWidth = Math.max(1.1, r * .24);
+  ctx.beginPath(); ctx.arc(0, 0, r * 1.15, 0, 7); ctx.fill(); ctx.stroke();
+  ctx.shadowBlur = 0; ctx.fillStyle = '#eaf3ff'; ctx.beginPath(); ctx.arc(r * .2, -r * .15, Math.max(1.2, r * .3), 0, 7); ctx.fill();
  } else if (shape === 'hex') {
   const sp6 = (R?.t || 0) * 3 + q.x * .02;
   poly(ctx, r * 1.2, 6, sp6, 0); ctx.fill(); ctx.stroke();
@@ -1582,7 +1747,7 @@ function drawProjectile(ctx, q, enemy = false) {
   ctx.shadowBlur = 0; ctx.fillStyle = hot; ctx.beginPath(); ctx.arc(r*.12,-r*.10,Math.max(1.1,r*.24),0,7); ctx.fill();
  }
  // Keep the two mini-jets visibly outside the projectile body.
- if (!enemy || SET.ef) jet(ctx, r, col, hot);
+ if ((!enemy || SET.ef) && shape !== 'snipe') jet(ctx, r, col, hot);
  ctx.restore();
 }
 
@@ -1855,6 +2020,7 @@ function draw(x) {
   x.font = `700 ${Math.round(e.r * 1.5)}px 'JetBrains Mono',monospace`;
   x.fillStyle = e.fl > 0 ? '#fff' : e.c;
   x.fillText(e.g, e.x, e.y + 1);
+  if (e.race && R.race && R.race.lock && R.race.lock.holder === e && R.race.lock.state === 'active') drawLockRing(x, e);
   }
 
   // Clear, animated burn status: flames, glow, and an explicit BURN tag.
@@ -1936,6 +2102,7 @@ function draw(x) {
    stTag(e.boss ? 'EXPOSED' : 'ARMOR -', '#ff5c7a', '#ffd0d8', 'rgba(44,10,20,.88)'); stN++;
   }
  }
+ drawRaceLinks(x);
  for (const q of R.pr) drawProjectile(x, q, false);
  for (const b of R.eb) drawProjectile(x, b, true);
 
@@ -2102,8 +2269,16 @@ function draw(x) {
    x.fillStyle = c.mu; x.fillRect(bx, 44, 160, 8);
    x.fillStyle = alive ? b.c : '#5a5f70'; x.fillRect(bx, 44, 160 * Math.max(0, b.hp) / (b.max || 1), 8);
    x.fillStyle = alive ? b.c : '#7d8498'; x.font = "700 10px 'JetBrains Mono',monospace";
-   x.fillText(alive ? nm + ' ' + Math.max(0, Math.ceil(b.hp)) + '/' + b.max : nm + ' TERMINATED', bx + 80, 64);
+   const Lk = R.race.lock, hasLock = alive && Lk && Lk.holder === b && (Lk.state === 'active' || Lk.state === 'transit');
+   x.fillText(alive ? nm + (hasLock ? ' [LOCK]' : '') + ' ' + Math.max(0, Math.ceil(b.hp)) + '/' + b.max : nm + ' TERMINATED', bx + 80, 64);
+   if (hasLock && Lk.state === 'active') { x.fillStyle = 'rgba(159,232,255,.25)'; x.fillRect(bx, 54, 160, 3); x.fillStyle = '#9fe8ff'; x.fillRect(bx, 54, 160 * Math.max(0, Lk.dur) / (Lk.max || 1), 3); }
   });
+  {
+   const Lk = R.race.lock; x.font = "700 9px 'JetBrains Mono',monospace";
+   if (Lk && Lk.state === 'broken') { x.fillStyle = '#9fe8ff'; x.fillText('LOCK RECOMPILING ' + Math.max(0, Math.ceil(Lk.cd)) + 's', 320, 92); }
+   else if (Lk && Lk.state === 'transit') { x.fillStyle = '#9fe8ff'; x.fillText('LOCK TRANSFER', 320, 92); }
+   else if (R.race.merged) { x.fillStyle = '#d9a6ff'; x.fillText('THREAD MERGE', 320, 92); }
+  }
   x.fillStyle = c.ink; x.font = "700 11px 'JetBrains Mono',monospace";
   x.fillText('THE RACE CONDITION', 320, 78);
  } else if (bs && bs.bd0) {
@@ -2302,10 +2477,10 @@ function beginBossLoad(bossKey, after) {
  sectorLoading = true;
  const token = ++sectorLoadToken;
  const style = {
-  segfault: { bg: '#0b0710', accent: '#b56cff', hi: '#ead5ff', ok: '#c99cff', dim: '#6f4d8a', glow: 'rgba(180,100,255,.16)' },
+  segfault: { bg: '#100608', accent: '#ff5c7a', hi: '#ffd0d8', ok: '#ff91aa', dim: '#7f3d4c', glow: 'rgba(255,70,100,.16)' },
   leak: { bg: '#07100c', accent: '#55e6a5', hi: '#caffea', ok: '#8ff0c3', dim: '#477d68', glow: 'rgba(70,220,150,.15)' },
-  runtime: { bg: '#120705', accent: '#ff6a55', hi: '#ffd0c8', ok: '#ff9c8b', dim: '#8f4d43', glow: 'rgba(255,90,70,.17)' },
-  race: { bg: '#0a0812', accent: '#7a8cff', hi: '#e3e6ff', ok: '#9fb0ff', dim: '#56608f', glow: 'rgba(120,120,255,.16)' }
+  runtime: { bg: '#0b0710', accent: '#b48cff', hi: '#ead5ff', ok: '#c99cff', dim: '#6f4d8a', glow: 'rgba(180,140,255,.16)' },
+  race: { bg: '#0a0812', accent: '#ff4d5a', accent2: '#4d8dff', hi: '#e6e8ff', ok: '#b79cff', dim: '#5a5f8a', glow: 'rgba(160,110,255,.16)' }
  }[bossKey] || { bg: '#080a10', accent: '#7aa7ff', hi: '#d8e5ff', ok: '#a9c6ff', dim: '#536b8f', glow: 'rgba(90,140,255,.14)' };
  const names = { segfault: 'SEGFAULT', leak: 'MEMORY LEAK', runtime: 'RUNTIME ERROR', race: 'RACE CONDITION' };
  const refs = {
@@ -2321,6 +2496,7 @@ function beginBossLoad(bossKey, after) {
  const ready = waitReady(bossTrack(bossKey));
  const root = document.createElement('div');
  root.id = 'sector-load';
+ if (bossKey === 'race') root.classList.add('load-dual'); // red-to-blue gradient boot screen
  for (const k in style) root.style.setProperty('--load-' + ({ bg: 'bg', accent: 'accent', hi: 'hi', ok: 'ok', dim: 'dim', glow: 'glow' }[k] || k), style[k]);
  root.innerHTML = `<div class="load-window"><div class="load-head">SPELLCODE RUNTIME // THREAT TRANSITION</div><div id="load-lines"></div><div class="load-bar"><div class="load-fill"></div></div><div>&gt; ${names[bossKey] || 'BOSS'} <span class="load-cursor"></span></div></div>`;
  A.replaceChildren(root);

@@ -175,7 +175,14 @@ export const RACE = {
  twinCd: .85,      // post-split attack cooldown multiplier (lower = faster)
  red: '#ff4d5a', blue: '#4d8dff',
  dash: { cd: [2.4, 3.6], tele: .95, lock: .38, t: .34, sp: 430, dmg: 14 },
- shoot: { cd: [3.2, 4.6], tele: 1.05, lock: .4, n: 5, spread: .2, sp: 135, dmg: 8, zones: 2, zr: 50, zdmg: 12 }
+ shoot: { cd: [3.2, 4.6], tele: 1.05, lock: .4, n: 5, spread: .2, sp: 135, dmg: 8, zones: 2, zr: 50, zdmg: 12 },
+ snipe: { tele: .45, lock: .15, sp: 1100, dmg: 11 },                                        // very fast telegraph, single fast shot
+ mutex: { reduce: .3, dur: .5, grow: 2, handover: 9, cd: 9, transit: .6 },                 // lock holder takes 30% damage; shield = dur x twin max HP (raw dmg), doubles each re-form
+ tether: { dmg: 8, cd: .6, arm: 1.5, w: 3 },                                               // line between the twins
+ collide: { grow: 1.5, dmg: 1.3 },                                                         // red dash through a blue marker: bigger, harder
+ merge: { speed: 1.25, cd: .8 },                                                           // survivor after one twin dies
+ lead: .45,                                                                                // blue aims this many seconds ahead of your movement
+ pincer: 62                                                                                // distance of the flanking marker beside the lane
 };
 export const BOSSES = {
  segfault:{n:'THE SEGFAULT',hp:720,r:24,sp:28,arena:'void',g:'Ж',c:'#ff5c7a',i:'Crashes zones of the arena. Exposed after each crash.',ph:[{ring:3.4,zone:5},{ring:2.8,zone:3.4,summon:8},{ring:2.2,zone:2.5,aim:2.8,summon:6}]},
