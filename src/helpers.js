@@ -29,9 +29,9 @@ export const wo = k => {
 
 export const XT = {
  for: ['casts 3x', 'casts 4x'],
- async: ['cooldown -58%, damage still -15%', 'cooldown -66%, damage still -15%'],
+ async: ['fire rate x2.38, damage still -15%', 'fire rate x2.94, damage still -15%'],
  map: ['5-way spread, penalty stays -25%', '7-way spread, penalty stays -25%'],
- overflow: ['x2.6 damage, cooldown still x1.5', 'x3.2 damage, cooldown still x1.5'],
+ overflow: ['x2.6 damage, fire rate still x0.67', 'x3.2 damage, fire rate still x0.67'],
  try: ['+10 shield per cast', '+15 shield per cast'],
  homing: ['turn rate x2, penalty stays -10%', 'turn rate x3, penalty stays -10%'],
  bounce: ['bounces 6x', 'bounces 9x'],
@@ -44,7 +44,7 @@ export const XT = {
  knock: ['knockback x2', 'knockback x3'],
  leech: ['heals up to 10% of damage', 'heals up to 15% of damage'],
  pull: ['pull radius +40%', 'pull radius +80%'],
- sudo: ['crits do x3, cooldown penalty stays x1.6', 'crits do x4, cooldown penalty stays x1.6']
+ sudo: ['crits do x3, fire rate penalty stays x0.63', 'crits do x4, fire rate penalty stays x0.63']
 };
 
 export function xText(k, L) {
@@ -75,7 +75,7 @@ export function cardH(k, attr, u, v, cls, G) {
    <em style="color:${RC[d.r] || '#9d92b5'}">${RAR[d.r] || 'COMMON'}</em>
    <b>${d.n || k}${own}</b>
    <small>${d.d || ''}</small>
-   ${d.h ? `<i>${d.h}</i>` : ''}
+   ${d.h ? `<i class="syn">// synergy: ${String(d.h).replace(/^\+\s*/, '')}</i>` : ''}
    ${u ? '' : wo(k)}
    ${xl(k, v, u, G)}
  </button>`;

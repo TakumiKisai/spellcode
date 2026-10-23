@@ -1,0 +1,8 @@
+MEMORY LEAK BALANCE PASS (applied to a copy of spellcode-merged)
+All tuning lives in src/data.js, export const LEAK:
+  density   { ring: .78, nova: .75, volleyGap: .9 }   boss ring bullets x.78 (phases 2/3: 13->10, 16->12), Core nova 8->6, min gap between boss ring/aim volleys. Memory Leak only. Shard/Main Shard bursts untouched.
+  mainCore.stagger { threshold: 9, ref: 12, min: .4, max: 2.5, perSec: 5, decay: .9, decayDelay: 1.2, time: 4, lockout: 5, warn: .6, alert: .85 }
+  prism     { hp: 675, shield: 195 (was 900/260, -25% combined), shDelay: 2, interrupt: { dmg: .1, win: 1.5, cd: 1.6, immune: 5 } }
+  sigstop   { time: 15 }
+Code (src/main.js): corePressure()/staggerCore()/leakGlobal() (stagger + SIGSTOP), updPr (Main Core block), bossAI (density), dmgDirect()/prismHurt()/prismThink() (PRISM), queueSpawn()/necropost() (SIGSTOP gating), drawMainCore() + HUD (cues).
+src/audio.js: ONLY three new effect entries added (leak_core_strain / leak_core_stagger / leak_core_recover). Music, compressor, tracks untouched.

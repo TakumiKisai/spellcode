@@ -144,13 +144,14 @@ function renderDeckBody(G) {
  `;
 }
 
-export function renderOSWindows(G, handSize) {
+export function renderOSWindows(G, handSize, extra = []) {
  if (!G.windows) return '';
 
  const WINS = [
-  { key: 'draw', icon: '🗂️', title: `DRAW PILE INSPECTOR (${G.draw.length})`, renderBody: () => renderDrawBody(G, handSize) },
-  { key: 'disc', icon: '🗑️', title: `RECYCLE BIN (${G.disc.length})`, renderBody: () => renderDiscBody(G) },
-  { key: 'deck', icon: '📦', title: `DECK REPOSITORY (${G.deck.length})`, renderBody: () => renderDeckBody(G) }
+  { key: 'draw', icon: '🗂️', title: `DRAW PILE INSPECTOR (${(G.draw || []).length})`, renderBody: () => renderDrawBody(G, handSize) },
+  { key: 'disc', icon: '🗑️', title: `RECYCLE BIN (${(G.disc || []).length})`, renderBody: () => renderDiscBody(G) },
+  { key: 'deck', icon: '📦', title: `DECK REPOSITORY (${(G.deck || []).length})`, renderBody: () => renderDeckBody(G) },
+  ...extra
  ];
 
  return WINS.map(spec => {

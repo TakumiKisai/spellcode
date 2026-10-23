@@ -1,0 +1,51 @@
+SPELLCODE MERGED BUILD — 14 OCTOBER 2026
+========================================
+
+Purpose
+-------
+Combined the full project archive `spellcode-updated.zip` with the changes in
+`spellcode-iteration3-changed-files.zip`. The original uploaded archives were not
+modified. This is a separate merged copy for review and testing.
+
+Merged areas
+------------
+- src/main.js
+  - Kept the newer Memory Leak encounter work: dedicated lab arena support,
+    telegraphed minion spawns, squad targeting/evolution behavior, the Main Core
+    beam and blocking behavior, PRISM's sustained healing beam and separate
+    corruption boost, and CORE DUMP meteors/craters.
+  - Restored sector-driven boss selection, ordered/owned room selection,
+    sector-specific enemy pools and weighting, Deadlock tether/paired enemy
+    mechanics, Kernel enemy behaviors, themed decorative nodes, and the in-run
+    pause menu from the full sector branch.
+  - Added fullscreen support and dynamic arena sizing.
+- src/data.js
+  - Preserved all six world definitions, themed arenas, sector-only enemies,
+    placeholder Deadlock/Kernel bosses, and existing boss/track metadata.
+  - Added the 800x500 Memory Leak lab arena and merged the updated LEAK tuning.
+- src/combat.js
+  - Combined themed sector backgrounds with the new Boot Sector and animated
+    Memory Leak lab rendering.
+- index.html
+  - Preserved pause-menu styles and added responsive/fullscreen CSS.
+- src/constants.js and src/fullscreen.js
+  - Added dynamic arena dimensions and the fullscreen/fit-mode helper.
+
+Validation
+----------
+- `node --check` passed for every JavaScript file in src/.
+- Data integrity checks passed: every world room, world boss, and boss arena
+  reference resolves; 6 worlds, 15 enemy types, 33 arenas, and 6 boss entries.
+- The dedicated lab arena resolves to 800x500; Memory Leak ordinary army cap is
+  24 and ordinary Core cap is 3.
+- `npm run build` could not be completed in this environment because Vite was
+  not installed. Dependency installation was attempted but timed out. Therefore
+  this archive has passed syntax and data checks, but still needs a local Vite
+  build and gameplay smoke test before being pushed to GitHub.
+
+Recommended use
+---------------
+Extract this archive to a separate folder first. Do not overwrite the current
+working project until a local build and gameplay test pass. Keep your existing
+Git repository folder (including its .git directory) as-is, then copy reviewed
+merged files into it when ready.
