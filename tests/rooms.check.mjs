@@ -1,4 +1,4 @@
-import { MAPS, buildBossMap, buildLayerMap, ROOM_TYPES, slotRTP, slotTable, spinSlots, redrawCost, ENTRY_SPOT, DIR_VEC, DIR_OPP } from '../src/rooms.js';
+import { MAPS, buildBossMap, buildLayerMap, ROOM_TYPES, slotRTP, slotHandTable, evalSlotHand, spinSlots, redrawCost, ENTRY_SPOT, DIR_VEC, DIR_OPP } from '../src/rooms.js';
 import { ARENAS, WORLDS } from '../src/data.js';
 let fails = 0; const bad = m => { fails++; console.log('FAIL:', m); };
 const blocked = (A, x, y, r) => { for (const w of A.w) if (x > w[0] - r && x < w[0] + w[2] + r && y > w[1] - r && y < w[1] + w[3] + r) return true; return x < r || y < r || x > 631 || y > 391; };
@@ -47,10 +47,15 @@ for (let i = 0; i < 300; i++) { const m = buildLayerMap('kernel', 1 + i % 4); if
 console.log('kernel layouts distinct:', kd.size, 'of 300');
 // procedural generation must not leak into ordinary sectors
 if (buildLayerMap('heap', 1).procedural || !buildLayerMap('kernel', 1).procedural) bad('procedural flag wrong');
-// slots
-console.log('slot table:', JSON.stringify(slotTable().map(o => [o.n, o.thr, o.mult])), 'RTP', slotRTP());
-let tot = 0, N = 200000; for (let i = 0; i < N; i++) tot += spinSlots(1).payout; console.log('simulated return over', N, 'spins:', (tot / N).toFixed(3));
-if (spinSlots(2, .01).payout !== 20 || spinSlots(2, .05).payout !== 8 || spinSlots(2, .2).payout !== 4 || spinSlots(2, .9).payout !== 0) bad('slot thresholds');
+// slots: five reels scored like poker; chances are exact counts over all 6^5 outcomes
+{ const t = slotHandTable(), total = t.reduce((a, h) => a + h.count, 0);
+  if (total !== 7776) bad('slot outcomes should total 7776, got ' + total);
+  console.log('slot hands:', t.map(h => h.id + ' ' + (h.p * 100).toFixed(2) + '% x' + h.mult).join(' | '), '| RTP', slotRTP());
+  let tot = 0, N = 300000; for (let i = 0; i < N; i++) tot += spinSlots(1).payout; const sim = tot / N;
+  console.log('simulated return over', N, 'spins:', sim.toFixed(3)); if (Math.abs(sim - slotRTP()) > .02) bad('slot simulation does not match the exact return');
+  const E = (...s) => evalSlotHand(s);
+  if (E('7','7','7','7','7') !== 'five' || E('$','$','$','$','7') !== 'four' || E('#','#','#','%','%') !== 'full' || E('#','#','#','7','$') !== 'three' || E('$','$','%','%','7') !== 'twopair' || E('7','7','$','#','%') !== 'pair7' || E('$','$','7','#','%') !== 'pair' || E('7','$','#','%','&') !== 'none') bad('slot hand scoring');
+}
 console.log('redraw costs 0..7:', [0,1,2,3,4,5,6,7].map(redrawCost).join(','));
 console.log(fails ? fails + ' FAILURES' : 'ALL ROOM CHECKS PASSED');
 process.exit(fails ? 1 : 0);

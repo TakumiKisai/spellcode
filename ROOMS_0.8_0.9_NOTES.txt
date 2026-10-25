@@ -83,3 +83,17 @@ UPDATE 0.9.2 // MERCHANT + SHOP MENU RESTYLE
   - Room layout: merchant stands behind a wider counter, slot machine moved left to make room.
   - NOT VERIFIED visually: the HTML menu itself (no browser available here). Its structure, buttons, purchases and slots are covered by the headless
     tests; the canvas side (robot in the room, portrait) was rendered and inspected.
+
+UPDATE 0.9.3 // SLOTS, PASSIVES, HP RULE
+  - Slots are now poker-style: 5 reels, each an independent rand() pick of 6 symbols, scored as a poker hand. Chances are computed EXACTLY by counting
+    all 7776 outcomes, so the table on screen can never drift from the real odds. Paytable (rooms.js SLOTS.hands, edit mult to retune):
+    five of a kind x50 (0.08%), four x6 (1.93%), full house x5 (3.86%), three x2 (15.43%), two pair x1 (23.15%), pair of 7s x1 (7.72%),
+    any other pair x0 (38.58%), no match x0 (9.26%). Expected return 96.45% (house edge ~4%, the shop sign shows it). Bets 1 / 2 / 5.
+    The wager is taken before the roll, the payout is applied once (also if you close the menu mid-spin).
+  - The shop now sells passives (2 per shop, the same eligibility rules as the passive reward; price by rarity in SHOP.passivePrice). Reroll refreshes
+    cards and passives. Garbage Collector (kills grant shield) is excluded from the shop because it is shield regen (SHOP.passiveExclude).
+  - The shop sells HP recovery only: PATCH() (shield refill) is removed, and the R key no longer does anything.
+  - Fixed: the merchant portrait vanished after any click in the menu (the menu re-renders and the animation kept drawing to the old canvas).
+  - HP: the old +20% HP after every layer is gone (ST.rh baseline is now 0). HP is restored to FULL when a new sector begins. Shield behaviour is
+    unchanged (Debugger regens between layers, everyone refills at a new sector). BALANCE NOTE: layers are harder without the 20% heal, so RESTORE()
+    and heal rewards matter more; if it feels too harsh, give rh a small value again in the ST defaults (main.js, search "rh: 0").

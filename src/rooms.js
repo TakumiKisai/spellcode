@@ -34,33 +34,55 @@ export const SHOP = {
  cardCount: 3,
  cardPrice: [3, 6, 10],      // by card rarity (common, uncommon, rare)
  cardMaxRarity: 2,
+ passiveCount: 2,              // permanent run upgrades for sale (the same pool as the passive reward choice)
+ passivePrice: [5, 8, 12, 16, 22], // by passive rarity
+ passiveExclude: ['gc'],           // never sold here: Garbage Collector is shield regen, and the shop only sells HP recovery (it still drops as a reward)
+ // The shop only ever sells HP recovery. Shield is not for sale.
  restore: { name: 'RESTORE()', price: 4, heal: .4, stock: 2, d: 'Restore 40% HP. Use it between fights.' },   // placeholder name, easy to rename
- patch: { name: 'PATCH()', price: 3, stock: 2, d: 'Refill your shield. Use it between fights.' },
  crate: { name: 'MYSTERY_CRATE()', price: 5, d: 'One random card. Odds are shown.', odds: [[.60, 0], [.30, 1], [.10, 2]] }, // [chance, rarity]
  saleChance: .15,            // rand() < 0.15: one random card in the stock is 50% off
  rerollPrice: 1,
  maxRerolls: 3
 };
 
-// ---- Slots (Cycles casino) ------------------------------------------------------------------------------------------------
-// One roll per spin; thresholds are cumulative and shown to the player as rand() expressions. Expected return = sum(p * mult).
+// ---- Slots (Cycles casino): five reels, scored like poker hands ----------------------------------------------------------
+// Every reel is an independent rand() pick from the symbols; the five symbols are then scored as a poker hand. The chance of each hand is
+// computed EXACTLY by counting all 6^5 outcomes (so the table the player sees can never drift from the real odds). Edit mult to retune.
 export const SLOTS = {
  bets: [1, 2, 5],
- table: [
-  { id: 'jackpot', n: 'JACKPOT 7-7-7', p: .03, mult: 10, sym: ['7', '7', '7'] },
-  { id: 'triple', n: 'TRIPLE', p: .07, mult: 4, sym: ['#', '#', '#'] },
-  { id: 'pair', n: 'PAIR', p: .20, mult: 2, sym: ['%', '%', '&'] }
- ],
- misses: [['7', '#', '%'], ['%', '7', '&'], ['#', '&', '7'], ['&', '%', '#'], ['7', '&', '#']],
- symbols: ['7', '#', '%', '&']
+ reels: 5,
+ symbols: ['7', '$', '#', '%', '&', '@'], // '7' is the premium symbol
+ hands: [ // best first; payout = bet x mult (whole Cycles only)
+  { id: 'five', n: 'Five of a kind', mult: 50 },
+  { id: 'four', n: 'Four of a kind', mult: 6 },
+  { id: 'full', n: 'Full house', mult: 5 },
+  { id: 'three', n: 'Three of a kind', mult: 2 },
+  { id: 'twopair', n: 'Two pair', mult: 1 },
+  { id: 'pair7', n: 'Pair of 7s', mult: 1 },
+  { id: 'pair', n: 'Pair (any other)', mult: 0 },
+  { id: 'none', n: 'No match', mult: 0 }
+ ]
 };
-export function slotTable() { let acc = 0; return SLOTS.table.map(o => ({ ...o, thr: +(acc += o.p).toFixed(4) })); }
-export function slotRTP() { return +SLOTS.table.reduce((a, o) => a + o.p * o.mult, 0).toFixed(4); }
-// r defaults to Math.random(); pass r for deterministic tests. Pure: it never touches the balance.
-export function spinSlots(bet, r = Math.random()) {
- for (const o of slotTable()) if (r < o.thr) return { id: o.id, n: o.n, mult: o.mult, bet, payout: bet * o.mult, r, thr: o.thr, sym: o.sym.slice() };
- const m = SLOTS.misses[Math.floor(((r - .30) / .70) * SLOTS.misses.length) % SLOTS.misses.length] || SLOTS.misses[0];
- return { id: 'miss', n: 'NO MATCH', mult: 0, bet, payout: 0, r, thr: .30, sym: m.slice() };
+export function evalSlotHand(syms) {
+ const c = {}; for (const s of syms) c[s] = (c[s] || 0) + 1;
+ const v = Object.values(c).sort((a, b) => b - a), key = v.join('');
+ if (key === '5') return 'five'; if (key === '41') return 'four'; if (key === '32') return 'full'; if (key === '311') return 'three'; if (key === '221') return 'twopair';
+ if (key === '2111') return c[SLOTS.symbols[0]] === 2 ? 'pair7' : 'pair';
+ return 'none';
+}
+let _hands = null;
+export function slotHandTable() { // [{id, n, mult, count, p}] with exact probabilities
+ if (_hands) return _hands;
+ const N = SLOTS.symbols.length, total = N ** SLOTS.reels, cnt = {};
+ for (let i = 0; i < total; i++) { const syms = []; let q = i; for (let r = 0; r < SLOTS.reels; r++) { syms.push(SLOTS.symbols[q % N]); q = Math.floor(q / N); } const h = evalSlotHand(syms); cnt[h] = (cnt[h] || 0) + 1; }
+ return (_hands = SLOTS.hands.map(h => ({ ...h, count: cnt[h.id] || 0, p: (cnt[h.id] || 0) / total })));
+}
+export const slotRTP = () => +slotHandTable().reduce((a, h) => a + h.p * h.mult, 0).toFixed(4);
+// rand defaults to Math.random; pass a function for deterministic tests. Pure: it never touches the balance.
+export function spinSlots(bet, rand = Math.random) {
+ const sym = Array.from({ length: SLOTS.reels }, () => SLOTS.symbols[Math.floor(rand() * SLOTS.symbols.length) % SLOTS.symbols.length]);
+ const id = evalSlotHand(sym), h = SLOTS.hands.find(x => x.id === id);
+ return { id, n: h.n, mult: h.mult, bet, payout: bet * h.mult, sym };
 }
 
 // ---- Fixed maps for the ordinary sectors ---------------------------------------------------------------------------------
