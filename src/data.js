@@ -16,6 +16,7 @@ export const MUSIC = {
  runtime:{file:'runtime_error.mp3',gain:1,start:.77,end:295.67},
  race:{file:'race_condition.mp3',gain:1,start:0}, // loops the whole track; add end:<seconds> or start:<seconds> to trim silence
  nexus:{file:'nexus_complex.mp3',gain:1,start:0,fb:'generated'}, // add audio/nexus_complex.mp3 when the track exists; until then the generated-world track plays
+ cycles_shop:{file:'cycles_shop.mp3',gain:1,start:0}, // Cycle Shop rooms; loops the whole track (add end:<seconds> to trim once its length is final)
  title:{file:'localhost.mp3',gain:1,start:0,end:53.43},
  overtime:{file:'overtime.ogg',gain:1,start:0,end:61.3},
  gameover:{file:'game_over.mp3',gain:1,start:1.21,end:189.21},

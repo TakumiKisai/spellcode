@@ -175,6 +175,31 @@ body{cursor:url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%
 .sbx-screen .logo{background:linear-gradient(90deg,#7ee8ff,#b36bff,#ff8793);-webkit-background-clip:text;background-clip:text;color:transparent}
 .sbx-screen .panel{background:linear-gradient(160deg,#070c1a,#0d0a1f);border:1px solid #7ee8ff66;box-shadow:0 0 18px #7ee8ff22;font-family:'JetBrains Mono',monospace}
 .sbx-screen .panel b{color:#ff8793}.sbx-screen select,.sbx-screen input{background:#0a1226;color:#e8f4ff;border:1px solid #7ee8ff66;border-radius:4px;font:12px 'JetBrains Mono',monospace;padding:5px}
+
+#mapbtn{position:absolute;top:6px;right:44px;height:32px;padding:0 9px;border-radius:6px;background:rgba(10,14,24,.7);color:var(--ink);border:1px solid rgba(255,255,255,.3);font:700 11px 'JetBrains Mono',monospace;cursor:pointer;opacity:.85;z-index:5;display:none;touch-action:manipulation}#mapbtn:hover{opacity:1}#mapbtn.on{border-color:#5ee0d0;color:#5ee0d0}
+#maparea{position:absolute;display:none;z-index:6;cursor:pointer}
+/* ===== Cycle Shop menu (built from the game's own panel / card / button styles) + room interact button ===== */
+#interact{position:absolute;left:50%;bottom:58px;transform:translateX(-50%);z-index:5;display:none;padding:9px 18px;border:2px solid var(--gold);border-radius:8px;background:rgba(10,14,24,.9);color:var(--gold);font:700 12px 'JetBrains Mono',monospace;letter-spacing:.08em;cursor:pointer;touch-action:manipulation}
+#shopov{position:fixed;inset:0;z-index:70;background:rgba(5,8,14,.8);display:flex;align-items:center;justify-content:center;padding:10px;overflow:auto}
+.sh-box{width:min(96vw,780px);max-height:94vh;overflow:auto;background:var(--panel);border:1px solid rgba(255,255,255,.2);border-radius:10px;padding:12px 14px;color:var(--ink);font-family:'JetBrains Mono',monospace;box-shadow:0 14px 40px rgba(0,0,0,.6);-webkit-overflow-scrolling:touch}
+.sh-head{display:flex;gap:12px;align-items:stretch}
+#sh-port{width:128px;height:128px;flex:none;border-radius:8px;background:var(--bg);border-top:5px solid var(--chip);image-rendering:pixelated}
+.sh-talk{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+.sh-name{font-size:11px;letter-spacing:.08em;color:var(--chip);font-weight:700}.sh-name span{color:var(--mute);font-weight:400}
+#sh-dlg{flex:1;background:var(--bg);border-radius:8px;padding:9px 11px;font-size:13px;line-height:1.5;min-height:54px}
+.sh-bar{display:flex;gap:6px;flex-wrap:wrap}.sh-pill{background:var(--bg);border-radius:999px;padding:3px 10px;font-size:11px;color:var(--mute)}.sh-pill b{color:var(--gold);font-size:12px}
+.sh-sec{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--mute);margin:12px 0 6px}
+.sh-slot{display:flex;flex-direction:column;gap:5px}.sh-slot .card{flex:1}
+.sh-tag{text-align:center;font:700 12px 'JetBrains Mono',monospace;color:var(--gold)}.sh-tag.sold{color:var(--mute)}.sh-tag em{display:block;font-style:normal;font-weight:400;font-size:9.5px;color:var(--chip)}
+.sh-pr{margin-top:6px;font:700 12px 'JetBrains Mono',monospace;color:var(--gold)}
+.sh-slots{background:var(--bg);border-radius:10px;padding:12px;margin-top:10px;text-align:center}
+.sh-reels{display:flex;justify-content:center;gap:10px;margin-bottom:12px}
+.sh-reels span{width:62px;height:62px;display:flex;align-items:center;justify-content:center;border-radius:6px;background:var(--card);color:var(--ci);border-top:5px solid var(--chip);box-shadow:0 2px 0 rgba(0,0,0,.22);font-size:30px;font-weight:700}
+.sh-bets{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.sh-odds{margin:0 auto;border-collapse:collapse;font-size:11px}.sh-odds th{color:var(--mute);font-weight:400;padding:2px 10px;text-align:left}.sh-odds td{padding:2px 10px;text-align:left}.sh-odds tr:nth-child(2) td:first-child{color:var(--gold)}
+.sh-note{color:var(--mute);font-size:10.5px;margin:8px 0 0}
+.sh-menu{display:flex;gap:8px;margin-top:12px}.sh-menu .btn{flex:1}
+@media(max-width:520px){#sh-port{width:84px;height:84px}#sh-dlg{font-size:12px}}
 </style></head>
 <body><div id="app"></div>
 <script type="module" src="./src/main.js"></script>

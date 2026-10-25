@@ -1,0 +1,85 @@
+SPELLCODE 0.8 + 0.9 // CONNECTED ROOMS, SPECIAL ROOMS, CYCLE SHOP, CYCLES
+=========================================================================
+Built in a separate copy of spellcode-alpha. Not pushed anywhere. package.json is unchanged.
+
+CHANGED / NEW FILES
+  src/rooms.js (NEW)      all room data: ROOM_TYPES, the 16 authored maps (MAPS), arena derivation (door carving), the Kernel-only
+                          generator, CYCLES / SHOP / SLOTS tuning, slot roll. Pure module (no DOM, no game state).
+  src/main.js             room runtime block (just above spawnE), hooks in genRound / prepRound / fight / step / finish / draw / musicTrack /
+                          takeReward / key handler, shop menu UI, redraw now costs Cycles, Safe Round / Elite Hunt page removed.
+  src/data.js             MUSIC.cycles_shop entry only.
+  index.html              CSS for the shop menu and the mobile interact button.
+  tests/rooms.check.mjs   Node check of the map data (node tests/rooms.check.mjs).
+
+0.8 // CONNECTED ROOM MAPS
+  - Ordinary layers (Layers 1-4 of Boot Sector, The Heap, /dev/null, Nexus Complex) are fixed, authored maps. Edit MAPS in rooms.js.
+    Notation: letter = room (S entry, C combat, X exit node, E challenge, T treasure, $ shop), '-' joins side by side, '|' joins above/below.
+  - Each room reuses an existing world arena (derived copy with walls/hazards cut around the doors so they are reachable; safe rooms also lose
+    hazards and central walls). Exit nodes use the layer's own arena, so each layer keeps its identity.
+  - Doors are tinted by what is behind them (E / $ / T labelled), red and locked while a room is hostile, open when cleared. Minimap bottom-right.
+  - Cleared rooms stay cleared (state lives on G.cfg.map); safe rooms never spawn enemies. HP / deck / pipeline / shield carry through doors.
+  - Exit node: clear it (swarm, or the existing hack / data-core objective), then step on the NEXT LAYER portal -> the ORIGINAL layer reward screen.
+  - Boss layers (5), Deadlock, generated worlds and the sandbox are untouched (single room, same arenas, same progression).
+  - Kernel is the only sector that gets procedurally generated maps (genKernelRooms), new every layer.
+  - Safe Round / Elite Hunt page and its handler are gone; no layer shows a choice screen now.
+
+0.9 // SPECIAL ROOMS
+  - Challenge room (E): elite encounter, 5 Cycles, then the normal reward screen with the Elite Hunt rarity table (uncommon or better), then you
+    return to the room.
+  - Treasure cache (T): interact (E key / OPEN button) -> 3-card choice + 1-3 Cycles. Flagged looted before the reward opens, so it cannot pay twice.
+  - Cycle Shop ($): the merchant (cyborg with an LED broom, drawn with canvas shapes, no sprites) is always in the room with a counter, a slot machine
+    and an rand() odds board. Talk to him -> Undertale-style menu: portrait, typewriter dialogue, BUY / SLOTS / LEAVE. cycles_shop plays on room entry.
+  - BUY: 3 cards (existing card defs, same add-to-deck path as rewards, 15% chance one is 50% off), RESTORE() (+40% HP, stock 2), PATCH() (refill
+    shield, stock 2), MYSTERY_CRATE() (random card, odds shown), REROLL_STOCK(). Wand / weapon shop NOT implemented; add a new category in
+    buildShopStock() / shopRender() when the time comes.
+  - Consumables: Q = RESTORE(), R = PATCH(), only in a cleared / safe room (never mid-fight).
+  - SLOTS: bets 1 / 2 / 5, one roll per spin shown as cumulative rand() thresholds: <0.03 JACKPOT x10, <0.10 TRIPLE x4, <0.30 PAIR x2, else x0.
+    Expected return 98%. The wager is deducted before the roll; the payout is applied once (also if you close the menu mid-spin).
+
+CYCLES // WHAT WAS IMPLEMENTED
+  Taken from the design notes: Cycles are the in-run currency (not Commits), carry between layers, and a redraw costs escalating Cycles per layer
+  (1, 2, 3, ...) that resets each layer. Shop casino = slot reels with visible probability expressions.
+  PROTOTYPE VALUES (rooms.js, CYCLES): start with 3; earn 2 per combat room, 3 per exit node, 5 per challenge, 1-3 from a chest.
+  UNRESOLVED: the repository does not contain the earlier Cycles design, so these could NOT be recovered and are placeholders: starting balance,
+  how Cycles are earned, any boss payout (CYCLES.earn.boss exists but nothing pays it yet), the real slot odds / payout table, the exact shop prices,
+  and whether anything besides Redraw and the shop spends Cycles. Redraw used to be one free reroll per round; it now costs Cycles as above.
+
+TESTING
+  CODE CHECKS: node --check on every src file; tests/rooms.check.mjs (16 maps + 300 Kernel layouts parse, are connected, have symmetric doors and
+  reachable doors; boot 1-3 chest is on the right; slot odds); npm run build equivalent (vite build) succeeds.
+  HEADLESS RUNS (real game code under jsdom with a stubbed canvas, driven by clicks / key events; NOT a browser, nothing was looked at):
+    layer 1-1 played entry->exit incl. locked doors, clear, revisit, portal, reward, advance; all 16 authored layers + 16 Kernel layers walked
+    entry->exit through real doors; boss layers keep their arena and have no map; Deadlock unchanged; challenge room + reward + return; chest
+    opens once; shop purchases, insufficient funds, stock limits, rapid-click, slots win / loss / close mid-spin, consumables, music track =
+    cycles_shop in the shop; redraw cost 1,2,3 and per-layer reset; sandbox starts and runs.
+  NOT VERIFIED: how anything LOOKS (merchant drawing, door tint, minimap, shop layout, mobile layout), how it FEELS (room budgets, prices, slot
+  pacing), audio actually playing (cycles_shop.mp3 loop length, volume), the real fullscreen / touch flow. Please play 1-2, 1-3 and 1-4 first.
+
+DEFERRED
+  Deadlock map, wands / weapon shop, Bandwidth, hosts, save system, story, Codex, boss rebalancing. Boss Cycles payout not wired.
+
+UPDATE 0.9.1 // FEEDBACK PASS
+  - Merchant redrawn WALL-E style (boxy rusted torso on twin treads, telescoping neck, binocular eyes, claw arms, LED broom).
+  - Boss layers (Layer 5 of Boot / Heap / null / Nexus) now have an antechamber with a BOSS DOOR (glowing frame, striped warning mat). Walking
+    through it opens the original boss boot screen ("ENGAGE ..."), then the dedicated boss arena and boss code, unchanged. cfg.bossKey holds the
+    boss until the door is used; cfg.boss is set only then. Deadlock layer 5 is unchanged (no door yet). Sandbox with a specific boss chosen still
+    goes straight to the fight.
+  - Every mapped room now has themed walls (circuit / memory blocks / glitch / lab panels / hazard stripes per sector) with proper door frames:
+    locked leaves while hostile, retracted leaves + glowing threshold when open, room-type tag by each door.
+  - MAP button (top right, next to pause; or M key): off by default. Button turns the minimap on (top-left, below the HUD). Click the minimap for a
+    big pop-up map (game pauses). Click again to turn the map off. Esc also closes it. The setting carries across rooms.
+  - Sandbox now uses the same room maps (round / layer picked in the sandbox menu).
+  - TESTING: headless runs repeated (all earlier checks still pass), plus boss door in all four sectors, boss defeat -> reward, map toggle, sandbox
+    rooms. Screens were also RENDERED to images with a real canvas implementation and inspected by eye (walls per sector, doors, merchant,
+    portrait, boss door, minimap, big map). Still not a real browser: timing, audio, touch and real fonts are unverified.
+
+UPDATE 0.9.2 // MERCHANT + SHOP MENU RESTYLE
+  - Merchant is now a pixel-art robot (drawn from rectangles on a 64x64 grid in drawMerchantPx(), scaled without smoothing; still no image assets):
+    dome cap, screen face with yellow eyes, brass ear-cups, brown apron with pockets, claw hands, piston legs on tread feet, and a real broom
+    (bristles on the floor, LED string wired up to the antenna). The WALL-E drawing is gone. Edit palette MP / lights MLED at the top of that block.
+  - Shop menu no longer imitates Undertale: it uses the game's own panel, .btn, .card styles and CSS variables (so it follows light / dark themes),
+    the shop cards are the real cardH() cards (same as reward screens) with a Cycle price under each, supplies are .card.u tiles, buttons are
+    buy() / slots() / leave(). The merchant opens straight onto the BUY tab.
+  - Room layout: merchant stands behind a wider counter, slot machine moved left to make room.
+  - NOT VERIFIED visually: the HTML menu itself (no browser available here). Its structure, buttons, purchases and slots are covered by the headless
+    tests; the canvas side (robot in the room, portrait) was rendered and inspected.

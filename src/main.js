@@ -1,5 +1,6 @@
 import { W, H, GW, GH, PLAN, CHAOS, setArenaSize } from './constants.js';
 import { RAR, RC, SPELLS, MODS, UPG, HOSTS, DK, WORLDS, EN, ARENAS, BOSSES, RACE, LEAK, SEGFAULT, PLAYER_SHIELD } from './data.js';
+import { ROOM_TYPES, CYCLES, SHOP, SLOTS, redrawCost, slotTable, slotRTP, spinSlots, buildLayerMap, buildBossMap, ENTRY_SPOT, DIR_OPP } from './rooms.js';
 import { $, ri, pick, cl, shuffle, css, mk, defOf, isMod, maxV, okMod, wo, xText, xl, cardH } from './helpers.js';
 import { renderOSWindows } from './probability.js';
 import { drawNodes } from './themes.js';
@@ -226,8 +227,9 @@ function musicTrack() {
  if (G.view === 'result') return G.resultWin ? 'win' : 'gameover';
  if (G.view === 'run') {
   if (G.cfg?.boss) return bossTrack(G.cfg.boss);
-  // Overtime is a per-round timer, not cumulative run time.
-  if (R && R.t >= 70) return 'overtime';
+  if (R?.room?.type === '$') return 'cycles_shop'; // Cycle Shop rooms have their own track
+  // Overtime is a per-round timer, not cumulative run time (never in a cleared / safe room).
+  if (R && R.t >= 70 && !R.room?.cleared) return 'overtime';
  }
  if (G.world) return worldTrack(G.world);
  return 'title';
@@ -267,7 +269,8 @@ function initializeRun(sandbox = false, startRound = 1, bossChoice = 'round') {
   slots: [], kills: 0, xs: 0, xh: 0, time: 0, hp: null, max: 0, sh: 30, lastArena: '',
   last: [], modal: null, redrawUsed: 0, windows: defaultWindows(),
   sandbox, sandboxRound: sandbox ? startRound : null, sandboxBossChoice: bossChoice,
-  sandboxImmortal: !!sandbox, sandboxMessage: '', bar: null
+  sandboxImmortal: !!sandbox, sandboxMessage: '', bar: null,
+  cycles: CYCLES.start, items: { restore: 0, patch: 0 }, layerRedraws: 0, rewardCtx: null, shop: null, mapMode: 0
  };
  calcST();
  G.hp = G.max;
@@ -293,12 +296,13 @@ export function newRun() { initializeRun(); }
 // commits, achievements, quests, best-round records, or permanent rewards here.
 function sandboxPrepareRound() {
  const c = genRound(G.round);
- if (G.sandboxBossChoice !== 'round' && BOSSES[G.sandboxBossChoice]) {
+ if (G.sandboxBossChoice !== 'round' && BOSSES[G.sandboxBossChoice]) { // a specifically chosen test boss skips the rooms and goes straight to the fight, as before
+  delete c.map; delete c.bossKey; c.layerBudget = undefined;
   c.boss = G.sandboxBossChoice; c.k = 'fb'; c.arena = BOSSES[c.boss].arena;
  }
- G.cfg = c;
- if (c.boss) preloadMusic(bossTrack(c.boss));
- if (c.k === 'e') { G.view = 'choice'; render(); } else draft();
+ G.cfg = c; G.layerRedraws = 0;
+ if (c.boss || c.bossKey) preloadMusic(bossTrack(c.boss || c.bossKey));
+ draft();
 }
 function sandboxSkipRound() {
  if (!G.sandbox) return;
@@ -321,10 +325,15 @@ function sandboxSkipRound() {
 
 function genRound(i) {
  // The boss belongs to the WORLD (sector); worlds without one (generated) fall back to the old sector order.
- const L = G.layer, boss = L === 5 ? (G.world?.boss || ({ 1: 'leak', 2: 'segfault', 3: 'race', 4: 'runtime' }[G.sector] || 'runtime')) : null, k = boss ? 'fb' : (L === 2 || L === 4) ? 'e' : 'n';
+ const L = G.layer, boss = L === 5 ? (G.world?.boss || ({ 1: 'leak', 2: 'segfault', 3: 'race', 4: 'runtime' }[G.sector] || 'runtime')) : null, k = boss ? 'fb' : 'n';
  const ar = boss ? BOSSES[boss].arena : G.world.ordered ? G.world.ar[(L - 1) % G.world.ar.length] : pick(G.world.ar.filter(a => a !== G.lastArena));
  G.lastArena = ar;
- return { i, k, boss, arena: ar, budget: Math.min(5 + 2.2 * i, 36), elite: false };
+ const cfg = { i, k, boss, arena: ar, budget: Math.min(5 + 2.2 * i, 36), elite: false };
+ // Ordinary layers of the fixed-map sectors (and Kernel's procedural ones) become connected room maps; boss layers, Deadlock, generated worlds and the sandbox keep the single room.
+ if (G.world?.key && !boss) { const m = buildLayerMap(G.world.key, L); if (m) { cfg.map = m; cfg.layerBudget = cfg.budget; cfg.arena = m.rooms[m.start].arena; } }
+ // Boss layers: an antechamber with a boss door. The boss only becomes the active fight (cfg.boss) once you walk through it; Deadlock keeps its own flow.
+ if (G.world?.key && boss) { const m = buildBossMap(G.world.key, boss); if (m) { cfg.map = m; cfg.bossKey = boss; cfg.boss = null; cfg.k = 'n'; cfg.budget = 0; cfg.arena = m.rooms[m.start].arena; } }
+ return cfg;
 }
 function worldOpts() {
  const pool = shuffle(Object.keys(WORLDS).filter(k => k !== 'boot' && k !== 'kernel' && !G.visited.includes(k))), take = () => pool.length ? WORLDS[pool.pop()] : genWorld();
@@ -346,8 +355,10 @@ function advance() {
 
 function prepRound() {
  G.cfg = genRound(G.round);
- if (G.cfg.boss) preloadMusic(bossTrack(G.cfg.boss));
- if (G.cfg.k === 'e') { G.view = 'choice'; render(); } else draft();
+ G.layerRedraws = 0; // redraw cost climbs per layer and resets on each new one
+  if (G.cfg.boss || G.cfg.bossKey) preloadMusic(bossTrack(G.cfg.boss || G.cfg.bossKey));
+ if (G.cfg.map && Object.values(G.cfg.map.rooms).some(r => r.type === '$')) preloadMusic('cycles_shop');
+ draft();
 }
 
 const chime = () => uiSound('card_fuse');
@@ -632,7 +643,7 @@ function takeReward(o) {
  else G.hp = Math.min(G.max, G.hp + G.max * .5);
  calcST();
  uiSound('reward');
- advance();
+ afterReward();
 }
 
 // Arena / Combat Simulation
@@ -885,6 +896,7 @@ function fight() {
  closePause();
  G.slots.forEach(c => c.lk = 1);
  const c = G.cfg;
+ roomSetup(c);
  const reducedMotion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)').matches : false;
  setArenaSize(ARENAS[c.arena].W || 640, ARENAS[c.arena].H || 400); // fixed framing for the whole fight: the full room is always visible, no zoom/scroll
  G.last = [...G.slots];
@@ -893,7 +905,7 @@ function fight() {
  const startSh = G.sh != null ? G.sh : ST.shmax;
  R = {
   t: 0, end: 0, sandbox: !!G.sandbox, invincible: !!G.sandboxImmortal,
-  p: { ...freeSpot(c.arena), vx: 0, vy: 0, inv: .5, dash: 0, dcd: 0, nod: 0, fx: 0, fy: -1, sh: startSh, mov: 0, orb: null },
+  p: { ...(c.map && !c.boss ? roomSpawn(c) : freeSpot(c.arena)), vx: 0, vy: 0, inv: .5, dash: 0, dcd: 0, nod: 0, fx: 0, fy: -1, sh: startSh, mov: 0, orb: null },
   en: [], pr: [], eb: [], tg: [], ps: [], tx: [], fx: [], lines: [], ht: [],
   casts: compilePipeline(G.slots, ST).out.map((cc, i) => ({
    c: cc, id: i, label: castLabel(cc), t: 0, pend: 0, bt: 0, n: 0, dis: 0,
@@ -908,6 +920,7 @@ function fight() {
   col: { pan: css('--panel'), ink: css('--ink'), mu: css('--mute'), mult: css('--mult'), chip: css('--chip'), gold: css('--gold') }
  };
  if (G.world && G.world.key === 'boot') R.col = { pan: '#0d1629', ink: '#e8eefc', mu: '#7f93b8', mult: '#ff7a45', chip: '#5ee0d0', gold: '#e2b24a' }; // Boot Sector floor is always dark: keep HUD text light regardless of the page theme
+ if (c.map && !c.boss) roomInit(c);
  mouseFire = 0; mobileFire = 0; mobileContinuous = 0; fireBlockedX = 0; keys.x = 0;
  mouseX = R.p.x + 100; mouseY = R.p.y;
  if (c.boss) c.boss === 'segfault' ? setMusicMood(1300, .6, .35, .78) : setMusicMood(20000, .72, .35, .9); // Segment Fault entrance: slowed + muffled
@@ -923,8 +936,10 @@ function fight() {
    }
    return { x: 320, y: 60 };
   };
-  R.term = { ...fp(), p: 0 };
-  R.pk = [fp(), fp(), fp()];
+  if (!c.map || (R.room.type === 'X' && !R.room.cleared)) { // hack terminal + data cores only in hostile exit nodes of mapped layers
+   R.term = { ...fp(), p: 0 };
+   R.pk = [fp(), fp(), fp()];
+  }
  }
  if (c.elite) {
   const k = wpick(poolFor(c.i, 99).filter(kk => kk !== 'swarm' && kk !== 'chain'));
@@ -1028,6 +1043,8 @@ function fight() {
  syncCombatUI();
  const db = $('#dash');
  if (db) db.onpointerdown = e => { e.stopPropagation(); dashReq = true; };
+ const ib = $('#interact');
+ if (ib) ib.onpointerdown = e => { e.preventDefault(); e.stopPropagation(); interact(); };
 
  const ctx = cv.getContext('2d'), mine = R;
  {
@@ -1095,6 +1112,460 @@ function fight() {
   requestAnimationFrame(loop);
  };
  requestAnimationFrame(loop);
+}
+
+// ===== ROOMS: connected layer maps (0.8) + special rooms, Cycle Shop and Cycles (0.9) =====
+// A layer with a map is a graph of rooms. Each room entry is one fight(): G.cfg.map.cur names the room, roomSetup() points G.cfg at that room's
+// arena / budget / elite flag, and R.room carries the live room state. Walking through an open door calls leaveRoom(), which re-enters fight().
+// Persistent per-layer state (visited / cleared / looted rooms, shop stock) lives on G.cfg.map, so returning to a room never re-runs its encounter.
+const roomMap = () => G.cfg?.map || null;
+function findFree(arena, x, y) {
+ for (let r = 0; r < 240; r += 10) for (let a = 0; a < 16; a++) {
+  const px = x + Math.cos(a / 16 * 6.283) * r, py = y + Math.sin(a / 16 * 6.283) * r;
+  if (!wallHit(arena, px, py, 16) && !hazAt(arena, px, py)) return { x: px, y: py };
+ }
+ return { x, y };
+}
+function roomSetup(c) { // top of fight(): aim the shared cfg at the current room
+ const M = c.map; if (!M) return;
+ const rm = M.rooms[M.cur], T = ROOM_TYPES[rm.type], st = M.state[rm.id];
+  st.seen = true;
+ c.arena = rm.arena;
+ if (T.boss) { c.boss = c.bossKey; c.k = 'fb'; c.budget = 0; c.elite = false; return; } // the boss chamber runs through the original boss code
+ const fresh = !T.safe && !st.cleared;
+ c.budget = fresh ? Math.min(36, (c.layerBudget || c.budget) * (T.budget || .45)) : 0;
+ c.elite = !!(T.elite && fresh);
+}
+function roomSpawn(c) {
+ if (c.resumePos) { const p = c.resumePos; c.resumePos = null; return { x: p.x, y: p.y }; }
+ if (c.entryDir && ENTRY_SPOT[c.entryDir]) { const [x, y] = ENTRY_SPOT[c.entryDir]; return { x, y }; }
+ return freeSpot(c.arena);
+}
+function roomInit(c) { // right after R exists
+ const M = c.map, rm = M.rooms[M.cur], T = ROOM_TYPES[rm.type], st = M.state[rm.id];
+ const room = R.room = { id: rm.id, type: rm.type, T, cleared: !!(T.safe || st.cleared), t: 0, acts: [], near: null, rewardWait: 0 };
+ if (rm.type === 'T') room.acts.push({ k: 'chest', ...findFree(c.arena, 320, 200), r: 48, label: st.looted ? 'EMPTY CACHE' : '[E] OPEN CACHE' });
+ if (rm.type === '$') {
+  M.shop = M.shop || {}; room.shop = M.shop[rm.id] = M.shop[rm.id] || buildShopStock();
+  room.merchant = { x: 320, y: 138 };
+  room.acts.push({ k: 'merchant', x: 320, y: 168, r: 72, label: '[E] TALK TO MERCHANT' }, { k: 'slots', x: 205, y: 168, r: 44, label: '[E] CYCLE SLOTS' });
+ }
+ if (T.exit && room.cleared) room.portal = findFree(c.arena, 320, 200);
+ R.banner = rm.type === 'E' ? { t: 2.4, s: 'CHALLENGE: ELITE HUNT' } : rm.type === 'X' ? { t: 1.8, s: 'EXIT NODE' } : rm.type === 'C' && !room.cleared ? { t: 1.2, s: 'HOSTILE PROCESS' } : rm.type === '$' ? { t: 2.2, s: 'CYCLE SHOP' } : rm.type === 'T' ? { t: 1.6, s: 'TREASURE CACHE' } : null;
+ if (rm.type === '$') { preloadMusic('cycles_shop'); }
+ if (rm.type === 'S' && c.bossKey) R.banner = { t: 2.6, s: 'BOSS DOOR AHEAD' };
+ bindMapUI();
+ syncMusic();
+}
+function leaveRoom(d) {
+ const M = roomMap(), rm = M.rooms[R.room.id], to = rm.doors[d]; if (!to || R.end) return;
+ G.sh = Math.max(0, R.p.sh);
+ R.end = 1; // the old loop stops; fight() builds a fresh R for the next room
+ M.cur = to; G.cfg.entryDir = DIR_OPP[d]; G.cfg.resumePos = null;
+ if (M.rooms[to].type === 'B') { sfx('objective'); beginBossLoad(G.cfg.bossKey, () => fight()); return; } // boss door: the original boss boot screen, then the dedicated arena
+ sfx('dash');
+ fight();
+}
+function roomClear(m) { // a hostile room has been beaten (swarm cleared, or the exit node's hack / data objective completed)
+ const room = R.room, M = roomMap(), st = M.state[room.id];
+ if (room.cleared) return;
+ room.cleared = true; st.cleared = true;
+ R.en = []; R.eb = []; R.tg = []; R.term = null; R.pk = [];
+ R.banner = { t: 1.8, s: m === 'h' ? 'HACK COMPLETE' : m === 'o' ? 'DATA RECOVERED: BONUS' : room.type === 'E' ? 'CHALLENGE CLEARED' : 'ROOM CLEARED' };
+ sfx('objective');
+ const earn = CYCLES.earn[room.type] || 0;
+ if (earn) { G.cycles += earn; txt(R.p.x, R.p.y - 26, '+' + earn + ' CYCLES', '#e2b24a', 12); }
+ if (room.type === 'X') { M.layerMode = m; G.cfg.rmode = m; room.portal = findFree(G.cfg.arena, 320, 200); }
+ if (room.type === 'E' && !st.rewarded) {
+  st.rewarded = true; room.rewardWait = 1; const mine = R;
+  setTimeout(() => { if (R === mine && G.view === 'run') startRoomReward('challenge'); }, 1100);
+ }
+}
+function layerExit() { // stepping on the exit node's portal ends the layer through the ORIGINAL reward flow
+ if (R.end) return;
+ R.end = 1; G.cfg.rmode = roomMap().layerMode || 'p';
+ R.banner = { t: 1.2, s: 'LAYER COMPLETE' }; sfx('objective');
+ setTimeout(clearRound, 500);
+}
+function startRoomReward(kind) {
+ if (G.view !== 'run' || !R?.room) return;
+ G.sh = Math.max(0, R.p.sh);
+ G.rewardCtx = { kind, room: R.room.id }; G.cfg.resumePos = { x: R.p.x, y: R.p.y };
+ G.cfg.rmode = 'p'; G.cfg.elite = kind === 'challenge'; // challenge rooms pay the established Elite Hunt rarity table (uncommon or better)
+ R.end = 1; keys = {}; joy = null; dashReq = false; mouseFire = 0; mobileFire = 0; mobileContinuous = 0;
+ if (kind === 'chest') { G.cat = 'c'; G.offers = rollRewards('c'); } else { G.cat = null; G.offers = null; }
+ G.view = 'reward'; render(); syncMusic();
+}
+function afterReward() {
+ if (G.rewardCtx) { G.rewardCtx = null; G.cfg.elite = false; G.cat = null; G.offers = null; fight(); return; } // back to the room you were in
+ advance();
+}
+function openChest(act) {
+ const st = roomMap().state[R.room.id];
+ if (st.looted) { R.hint = { t: 1.4, s: 'This cache is already empty.' }; uiSound('deny'); return; }
+ st.looted = true; act.label = 'EMPTY CACHE'; // flagged BEFORE the reward screen opens, so it can never pay out twice
+ const [lo, hi] = CYCLES.chestCycles, n = lo + ri(hi - lo + 1);
+ G.cycles += n; sfx('pickup');
+ startRoomReward('chest');
+ G.rewardNote = `Cache opened: +${n} Cycles. Choose 1 card.`;
+}
+function useItem(k) {
+ if (!R || G.view !== 'run' || !R.room || !R.room.cleared || R.end) { if (R) R.hint = { t: 1.4, s: 'Items can only be used once the room is clear.' }; uiSound('deny'); return; }
+ if (!(G.items[k] > 0)) { uiSound('deny'); return; }
+ if (k === 'restore') {
+  if (G.hp >= G.max) { R.hint = { t: 1.4, s: 'HP is already full.' }; uiSound('deny'); return; }
+  G.items.restore--; healP(G.max * SHOP.restore.heal);
+ } else if (k === 'patch') {
+  if (R.p.sh >= ST.shmax) { R.hint = { t: 1.4, s: 'Shield is already full.' }; uiSound('deny'); return; }
+  G.items.patch--; R.p.sh = ST.shmax; G.sh = ST.shmax; ring(R.p.x, R.p.y, 34, '#7ee8ff', .4); sfx('heal');
+ }
+}
+const nearDoor = (d, p) => d === 'W' ? p.x < 14 && Math.abs(p.y - H / 2) < 46 : d === 'E' ? p.x > W - 14 && Math.abs(p.y - H / 2) < 46 : d === 'N' ? p.y < 14 && Math.abs(p.x - W / 2) < 46 : p.y > H - 14 && Math.abs(p.x - W / 2) < 46;
+function roomTick(dt) { // runs every frame while the room is clear / safe
+ const room = R.room, M = roomMap(), rm = M.rooms[room.id], p = R.p;
+ room.t += dt;
+ if (room.rewardWait || R.end) return;
+ if (room.portal && Math.hypot(p.x - room.portal.x, p.y - room.portal.y) < 26) { layerExit(); return; }
+ if (room.t > .45) for (const d in rm.doors) if (nearDoor(d, p)) { leaveRoom(d); return; }
+ room.near = null;
+ for (const a of room.acts) if (Math.hypot(p.x - a.x, p.y - a.y) < a.r && !(a.k === 'chest' && M.state[room.id].looted)) { room.near = a; break; }
+ const ib = $('#interact'); if (ib) { const show = room.near ? '1' : ''; if (ib.dataset.on !== show) { ib.dataset.on = show; ib.style.display = show ? 'block' : 'none'; } if (room.near) ib.textContent = room.near.k === 'chest' ? 'OPEN' : room.near.k === 'slots' ? 'SLOTS' : 'TALK'; }
+}
+function interact() {
+ if (!R || G.view !== 'run' || R.end || R.paused || R.shopOpen || !R.room || !R.room.cleared || !R.room.near) return;
+ const a = R.room.near;
+ if (a.k === 'chest') openChest(a);
+ else if (a.k === 'merchant') openShop('main');
+ else if (a.k === 'slots') openShop('slots');
+}
+
+// ---- Drawing: doors, props, merchant, portal, minimap ----
+// Pixel-art shop robot (rectangles on a 64x64 grid, scaled up without smoothing; no image assets). Feet stand at (fx, fy); s = pixel size.
+const MP = { k: '#0b0d10', nv: '#1e5b8c', nvl: '#3a86bd', nvd: '#12395a', br: '#c8902a', brl: '#f2c456', brd: '#7a5416', st: '#9aa5b1', stl: '#cdd5dd', std: '#5a6572', sc: '#07090d', ey: '#ffd83a', ap: '#7b4b25', apl: '#a0662f', apd: '#4d2d15', gr: '#6f9230', tan: '#caa55c', tand: '#8f7438', wood: '#7a4a24', woodl: '#9c6430' };
+const MLED = ['#ff4d6d', '#ffd83a', '#59e0ff', '#7dff9a', '#b45cff'];
+const mpx = (g, x, y, w, h, c) => { g.fillStyle = c; g.fillRect(x, y, w, h); };
+const mob = (g, x, y, w, h, c) => { mpx(g, x - 1, y - 1, w + 2, h + 2, MP.k); mpx(g, x, y, w, h, c); }; // block with a 1px outline
+function drawMerchantPx(g, t) {
+ const b = Math.sin(t * 2.2) > .5 ? 1 : 0;                       // idle breathing: head + torso drop 1px
+ const blink = (t % 3.4) > 3.25, tw = Math.floor(t * 3), sway = Math.sin(t * 2.4) > .35 ? 1 : Math.sin(t * 2.4) < -.35 ? -1 : 0;
+ mpx(g, 6, 61, 46, 2, 'rgba(0,0,0,.38)');                          // ground shadow
+ // ---- broom (behind the robot): handle, LED string, ferrule, bristles on the floor
+ mob(g, 12, 13, 2, 38, MP.wood); mpx(g, 12, 14, 1, 36, MP.woodl); mob(g, 11, 10, 4, 3, MP.br);
+ for (let i = 0; i < 6; i++) { const y = 17 + i * 6, side = i % 2 ? 15 : 9, c = MLED[(i + tw) % 5]; mpx(g, side < 12 ? 10 : 14, y + 1, 2, 1, '#22301f'); mob(g, side, y, 2, 2, c); mpx(g, side, y, 1, 1, '#fff'); }
+ for (let u = 0; u <= 22; u++) { const px = Math.round(13 + 21 * u / 22), py = Math.round(10 - 6 * u / 22 - 7 * Math.sin(Math.PI * u / 22)); mpx(g, px, py, 1, 1, u % 5 === 2 ? MLED[(u + tw) % 5] : '#22301f'); }
+ mob(g, 11, 47, 4, 3, MP.br); mpx(g, 11, 47, 4, 1, MP.brl);
+ const BW = [8, 10, 12, 14, 14, 14, 14, 14, 14, 14]; // bristles: a wide head that rests on the floor
+ for (let r = 0; r < 10; r++) { const w = BW[r], x0 = 13 - Math.floor(w / 2) + (r > 6 ? sway : 0); mpx(g, x0 - 1, 51 + r, w + 2, 1, MP.k); }
+ for (let r = 0; r < 10; r++) { const w = BW[r], x0 = 13 - Math.floor(w / 2) + (r > 6 ? sway : 0); mpx(g, x0, 51 + r, w, 1, MP.tan); for (let q = x0 + 1; q < x0 + w; q += 3) mpx(g, q, 51 + r, 1, 1, MP.tand); }
+ mpx(g, 6, 61, 16, 1, MP.k);
+ if (tw % 4 < 2) mpx(g, 3 + (tw % 3), 58 - (tw % 2), 1, 1, '#cbb88a');   // a speck of dust
+ // ---- legs: piston stubs + tread feet
+ mob(g, 30, 54, 3, 4, MP.std); mob(g, 39, 54, 3, 4, MP.std);
+ for (const fx of [26, 36]) { mob(g, fx, 57, 11, 4, MP.nv); mpx(g, fx + 1, 58, 9, 1, MP.br); mpx(g, fx + 1, 60, 9, 1, MP.nvd); for (let q = 0; q < 3; q++) mpx(g, fx + 2 + q * 3, 59, 2, 1, MP.std); }
+ // ---- torso (bobs with b)
+ const y0 = b;
+ mob(g, 28, 35 + y0, 16, 14, MP.nvd);
+ mpx(g, 30, 36 + y0, 12, 5, MP.std); mpx(g, 30, 36 + y0, 12, 1, MP.stl); mob(g, 34, 37 + y0, 4, 3, MP.br); mpx(g, 34, 37 + y0, 4, 1, MP.brl);
+ mob(g, 28, 41 + y0, 16, 12, MP.ap); mpx(g, 29, 42 + y0, 14, 1, MP.apl); mpx(g, 28, 41 + y0, 16, 1, MP.brd); mpx(g, 35, 41 + y0, 2, 1, MP.brl);
+ mob(g, 30, 46 + y0, 5, 5, MP.apl); mpx(g, 30, 46 + y0, 5, 1, MP.apd); mob(g, 37, 46 + y0, 5, 5, MP.apl); mpx(g, 37, 46 + y0, 5, 1, MP.apd);
+ mpx(g, 31, 44 + y0, 2, 2, MP.gr); mpx(g, 32, 48 + y0, 1, 2, '#6ab0ff'); mpx(g, 39, 44 + y0, 3, 3, '#e8d8b0'); mpx(g, 35, 48 + y0, 2, 4, MP.gr);
+ // ---- shoulders + arms
+ mob(g, 21, 35 + y0, 8, 6, MP.nv); mpx(g, 22, 36 + y0, 5, 1, MP.nvl); mpx(g, 21, 40 + y0, 8, 1, MP.br);
+ mob(g, 43, 35 + y0, 8, 6, MP.nv); mpx(g, 44, 36 + y0, 5, 1, MP.nvl); mpx(g, 43, 40 + y0, 8, 1, MP.br);
+ mob(g, 20, 42 + y0, 3, 4, MP.st); mob(g, 16, 45 + y0, 5, 3, MP.st); mob(g, 10, 43 + y0, 6, 6, MP.stl); mpx(g, 10, 46 + y0, 6, 1, MP.std); mpx(g, 11, 44 + y0, 2, 1, '#fff'); // left arm: tube + gauntlet gripping the handle
+ mob(g, 48, 42 + y0, 3, 6, MP.st); mpx(g, 47, 47 + y0, 5, 2, MP.br); mob(g, 47, 50 + y0, 5, 3, MP.std); mpx(g, 47, 53 + y0, 2, 2, MP.std); mpx(g, 50, 53 + y0, 2, 2, MP.std); // right arm: cuff + two-prong claw
+ // ---- head
+ mob(g, 36, 7 + y0, 2, 5, MP.st); mob(g, 34, 2 + y0, 6, 5, MP.br); mpx(g, 35, 3 + y0, 2, 2, Math.sin(t * 5) > 0 ? '#fff6c0' : MP.brl);
+ mob(g, 30, 10 + y0, 14, 2, MP.nv); mob(g, 27, 12 + y0, 20, 4, MP.nv); mpx(g, 31, 10 + y0, 7, 1, MP.nvl); mpx(g, 29, 13 + y0, 4, 2, MP.nvl); mpx(g, 41, 12 + y0, 5, 4, MP.nvd);
+ mob(g, 25, 16 + y0, 24, 2, MP.br); mpx(g, 26, 16 + y0, 22, 1, MP.brl);
+ mob(g, 26, 18 + y0, 22, 14, MP.st); mpx(g, 27, 18 + y0, 20, 1, MP.stl); mpx(g, 27, 30 + y0, 20, 1, MP.std);
+ mpx(g, 28, 20 + y0, 18, 10, MP.sc);
+ const eh = blink ? 1 : 4; mpx(g, 31, 22 + y0 + (blink ? 1.5 : 0) | 0, 3, eh, MP.ey); mpx(g, 40, 22 + y0 + (blink ? 1.5 : 0) | 0, 3, eh, MP.ey);
+ for (let q = 0; q < 3; q++) mpx(g, 33 + q * 3, 28 + y0, 2, 1, (tw + q) % 3 === 0 ? '#7dff9a' : '#1c3a26');
+ mob(g, 22, 19 + y0, 4, 10, MP.br); mpx(g, 23, 20 + y0, 1, 8, MP.brl); mob(g, 48, 19 + y0, 4, 10, MP.br); mpx(g, 49, 20 + y0, 1, 8, MP.brl); mpx(g, 50, 20 + y0, 1, 8, MP.brd);
+}
+let MER_CV = null;
+function drawMerchant(x, fx, fy, s, t) {
+ if (!MER_CV) { MER_CV = document.createElement('canvas'); MER_CV.width = 64; MER_CV.height = 64; }
+ const g = MER_CV.getContext('2d'); g.clearRect(0, 0, 64, 64); drawMerchantPx(g, t);
+ x.save(); x.imageSmoothingEnabled = false; x.drawImage(MER_CV, fx - 36 * s, fy - 61 * s, 64 * s, 64 * s); x.restore();
+}
+
+// ---- Themed room walls + door frames (visual only: the arena edge already collides at the player radius) ----
+const WALLS = {
+ boot: { fill: '#0b1a12', edge: '#62ff79', seam: '#1c5c35', acc: '#2fe06a', pat: 'circuit' },
+ heap: { fill: '#1b1509', edge: '#ffb04f', seam: '#5e4216', acc: '#ffcf7a', pat: 'blocks' },
+ null: { fill: '#110a1c', edge: '#b56cff', seam: '#43276f', acc: '#e0b3ff', pat: 'glitch' },
+ nexus: { fill: '#13202e', edge: '#5fd3ff', seam: '#285572', acc: '#bdeeff', pat: 'panels' },
+ kernel: { fill: '#1d0f0a', edge: '#ff765c', seam: '#6e2a1b', acc: '#ffb09e', pat: 'hazard' }
+};
+const WT = 9, GAP = 46; // wall thickness (= player radius), half the door width
+function wallSegs(rm) {
+ const d = rm.doors, f = (side, r, r2) => d[side] ? [r, r2] : [r];
+ const hz = (y, side) => d[side] ? [[0, y, W / 2 - GAP, WT], [W / 2 + GAP, y, W / 2 - GAP, WT]] : [[0, y, W, WT]];
+ const vt = (xx, side) => d[side] ? [[xx, WT, WT, H / 2 - GAP - WT], [xx, H / 2 + GAP, WT, H / 2 - GAP - WT]] : [[xx, WT, WT, H - 2 * WT]];
+ return [...hz(0, 'N').map(r => [...r, 'N']), ...hz(H - WT, 'S').map(r => [...r, 'S']), ...vt(0, 'W').map(r => [...r, 'W']), ...vt(W - WT, 'E').map(r => [...r, 'E'])];
+}
+function drawWallsAndDoors(x, room, M, rm, t) {
+ const th = WALLS[G.world?.key] || { fill: '#10161f', edge: G.world?.c?.[0] || '#9af5a0', seam: '#2a3646', acc: '#cfe', pat: 'panels' };
+ x.save();
+ for (const [sx, sy, sw, sh, side] of wallSegs(rm)) {
+  const hor = sw > sh, len = hor ? sw : sh;
+  x.fillStyle = th.fill; x.fillRect(sx, sy, sw, sh);
+  for (let k = 6; k < len - 2; k += 12) { // theme pattern along the wall
+   const px = hor ? sx + k : sx, py = hor ? sy : sy + k, a = (k * 7 + sx * 3 + sy) | 0, n = k % 36 === 6;
+   if (th.pat === 'circuit') { if (n) { x.fillStyle = th.seam; x.fillRect(px, py, hor ? 1 : sw, hor ? sh : 1); } if (k % 72 === 6) { x.fillStyle = th.acc; x.fillRect(hor ? px - 1.5 : sx + sw / 2 - 1.5, hor ? sy + sh / 2 - 1.5 : py - 1.5, 3, 3); } }
+   else if (th.pat === 'blocks') { x.fillStyle = (k / 12) % 2 ? 'rgba(255,176,79,.13)' : 'rgba(0,0,0,.28)'; x.fillRect(hor ? px - 6 : sx, hor ? sy : py - 6, hor ? 12 : sw, hor ? sh : 12); }
+   else if (th.pat === 'glitch') { x.fillStyle = th.seam; x.fillRect(px, py, hor ? 1 : sw, hor ? sh : 1); if ((Math.floor(t * 6) + (a % 5)) % 5 === 0) { x.globalAlpha = .5; x.fillStyle = th.acc; x.fillRect(hor ? px - 3 : sx + (a % 5), hor ? sy + (a % 6) : py - 3, hor ? 9 : 2, hor ? 2 : 9); x.globalAlpha = 1; } }
+   else if (th.pat === 'hazard') { x.strokeStyle = 'rgba(255,118,92,.38)'; x.lineWidth = 3; x.beginPath(); if (hor) { x.moveTo(px - 4, sy + sh); x.lineTo(px + 4, sy); } else { x.moveTo(sx + sw, py - 4); x.lineTo(sx, py + 4); } x.stroke(); }
+   else { if (n) { x.fillStyle = th.seam; x.fillRect(px, py, hor ? 1 : sw, hor ? sh : 1); x.fillStyle = th.acc; x.beginPath(); x.arc(hor ? px : sx + sw / 2, hor ? sy + sh / 2 : py, 1.2, 0, 7); x.fill(); } }
+  }
+  x.strokeStyle = th.edge; x.lineWidth = 1.6; x.shadowColor = th.edge; x.shadowBlur = 5; x.beginPath(); // glowing inner edge
+  if (side === 'N') { x.moveTo(sx, WT); x.lineTo(sx + sw, WT); } else if (side === 'S') { x.moveTo(sx, H - WT); x.lineTo(sx + sw, H - WT); } else if (side === 'W') { x.moveTo(WT, sy); x.lineTo(WT, sy + sh); } else { x.moveTo(W - WT, sy); x.lineTo(W - WT, sy + sh); }
+  x.stroke(); x.shadowBlur = 0;
+ }
+ // Doors. Local frame per side: x runs along the wall (0 = door centre), y runs from the OUTER edge into the room, wall occupies y 0..WT.
+ const FR = { N: [W / 2, 0, 0], S: [W / 2, H, Math.PI], W: [0, H / 2, -Math.PI / 2], E: [W, H / 2, Math.PI / 2] };
+ const TAG = { N: [W / 2, WT + 38], S: [W / 2, H - WT - 38], W: [WT + 44, H / 2], E: [W - WT - 44, H / 2] };
+ for (const side in rm.doors) {
+  const to = M.rooms[rm.doors[side]], tt = ROOM_TYPES[to.type], boss = to.type === 'B', open = room.cleared, pulse = .6 + .35 * Math.sin(t * 4);
+  const col = boss ? '#ff4d6d' : open ? tt.col : '#d23a3a', [fx, fy, fr] = FR[side], pw = boss ? 11 : 8, pd = WT + (boss ? 6 : 4);
+  x.save(); x.translate(fx, fy); x.rotate(fr);
+  x.fillStyle = '#0a0d12'; x.fillRect(-GAP - pw + 1, 0, pw, pd); x.fillRect(GAP - 1, 0, pw, pd); // posts
+  x.strokeStyle = th.edge; x.lineWidth = 1.5; x.strokeRect(-GAP - pw + 1, 0, pw, pd); x.strokeRect(GAP - 1, 0, pw, pd);
+  if (boss) { x.fillStyle = 'rgba(255,77,109,.6)'; for (let i = 0; i < 4; i++) { x.fillRect(-GAP - pw + 2, 2 + i * 4, pw - 2, 2); x.fillRect(GAP, 2 + i * 4, pw - 2, 2); } }
+  x.fillStyle = col; x.shadowColor = col; x.shadowBlur = 8; x.fillRect(-GAP - 4, pd - 2, 4, 3); x.fillRect(GAP, pd - 2, 4, 3); x.shadowBlur = 0; // post lights
+  if (boss) { // boss door: glowing outer frame + a hazard-striped warning mat in front of it
+   x.save(); x.globalAlpha = .55 + .35 * Math.sin(t * 3); x.strokeStyle = '#ff4d6d'; x.lineWidth = 2.5; x.shadowColor = '#ff4d6d'; x.shadowBlur = 14; x.strokeRect(-GAP - pw + 1, 0, 2 * (GAP + pw) - 2, pd + 26); x.restore();
+   x.save(); x.beginPath(); x.rect(-GAP + 2, WT, 2 * GAP - 4, 24); x.clip(); x.fillStyle = 'rgba(8,4,6,.7)'; x.fillRect(-GAP, WT, 2 * GAP, 24);
+   x.fillStyle = 'rgba(255,77,109,.5)'; const off = (t * 14) % 28; for (let i = -2; i < 8; i++) { const bx = -GAP + i * 28 + off; x.beginPath(); x.moveTo(bx, WT + 24); x.lineTo(bx + 12, WT + 24); x.lineTo(bx + 24, WT); x.lineTo(bx + 12, WT); x.closePath(); x.fill(); } x.restore();
+  }
+  if (!open) { // locked leaves meet in the middle
+   x.fillStyle = '#2a1216'; x.fillRect(-GAP + 3, 1, 2 * GAP - 6, WT - 2);
+   x.fillStyle = '#d23a3a'; for (let i = 0; i < 5; i++) x.fillRect(-GAP + 10 + i * 17, 3, 6, 3);
+   x.fillStyle = '#ff6a6a'; x.fillRect(-1.5, 0, 3, WT);
+  } else { // leaves retracted into the posts, glowing threshold
+   x.fillStyle = '#20262f'; x.fillRect(-GAP + 1, 1, 7, WT - 2); x.fillRect(GAP - 8, 1, 7, WT - 2);
+   x.globalAlpha = pulse; x.fillStyle = col; x.shadowColor = col; x.shadowBlur = 10; x.fillRect(-GAP + 9, WT - 3, 2 * GAP - 18, 3); x.shadowBlur = 0;
+   x.strokeStyle = col; x.lineWidth = 2; for (let i = 0; i < 3; i++) { const y = WT + 8 + i * 9 + (t * 16) % 9; x.globalAlpha = pulse * (1 - i * .28); x.beginPath(); x.moveTo(-6, y + 4); x.lineTo(0, y - 2); x.lineTo(6, y + 4); x.stroke(); } // chevrons toward the door
+   x.globalAlpha = 1;
+  }
+  x.restore();
+  const tag = boss ? 'BOSS' : to.type === 'C' || to.type === 'X' ? '' : to.type;
+  if (tag) { x.fillStyle = col; x.font = "700 " + (boss ? 14 : 11) + "px 'JetBrains Mono',monospace"; x.textAlign = 'center'; x.textBaseline = 'middle'; x.shadowColor = col; x.shadowBlur = boss ? 10 : 0; x.fillText(tag, TAG[side][0], TAG[side][1]); x.shadowBlur = 0; }
+ }
+ x.restore();
+}
+function drawRoomLayer(x) {
+ const room = R.room, M = roomMap(), rm = M.rooms[room.id], t = R.t, T = room.T;
+ drawWallsAndDoors(x, room, M, rm, t);
+ if (room.type === 'T') { // treasure cache
+  const a = room.acts[0], looted = M.state[room.id].looted;
+  x.save(); x.translate(a.x, a.y); x.shadowColor = '#e2b24a'; x.shadowBlur = looted ? 0 : 14;
+  x.fillStyle = looted ? '#3a3a3a' : '#7d5a1c'; x.fillRect(-18, -4, 36, 22); x.fillStyle = looted ? '#4a4a4a' : '#e2b24a'; x.fillRect(-18, -4, 36, 5);
+  if (looted) { x.fillStyle = '#222'; x.fillRect(-18, -14, 36, 8); } else { x.fillRect(-18, -12, 36, 9); x.fillStyle = '#0b1117'; x.fillRect(-3, 2, 6, 8); }
+  x.restore();
+ }
+ if (room.type === '$') { // cycle shop: marquee bulbs, counter, slot machine, odds board and the merchant
+  x.save();
+  for (let i = 0; i < 15; i++) { const on = (Math.floor(t * 6) + i) % 3 === 0; x.fillStyle = on ? '#ffd24a' : '#5a4a1a'; x.beginPath(); x.arc(70 + i * 36, 10, 3, 0, 7); x.fill(); }
+  x.fillStyle = '#b45cff'; x.font = "700 12px 'JetBrains Mono',monospace"; x.textAlign = 'center'; x.fillText('// CYCLES :: house edge 2% //', W / 2, 30);
+  drawMerchant(x, 320, 186, 2, t);
+  x.fillStyle = '#3b2a55'; x.fillRect(244, 176, 152, 18); x.strokeStyle = '#b45cff'; x.lineWidth = 1.5; x.strokeRect(244, 176, 152, 18); // counter (in front of the robot's feet)
+  x.fillStyle = '#e2b24a'; for (let i = 0; i < 6; i++) { x.beginPath(); x.arc(262 + i * 24, 185, 2.5, 0, 7); x.fill(); }
+  x.translate(205, 150); x.fillStyle = '#2a1840'; x.fillRect(-18, -24, 36, 52); x.strokeStyle = '#ff4de1'; x.lineWidth = 2; x.strokeRect(-18, -24, 36, 52);
+  x.fillStyle = '#07120f'; x.fillRect(-14, -16, 28, 14); x.fillStyle = '#7dff9a'; x.font = "700 11px 'JetBrains Mono',monospace";
+  x.fillText([0, 1, 2].map(i => SLOTS.symbols[Math.floor(t * 3 + i * 1.7) % 4]).join(''), 0, -6);
+  x.fillStyle = '#ffd24a'; x.beginPath(); x.arc(24, -8, 3, 0, 7); x.fill(); x.fillRect(23, -8, 2, 18);
+  x.restore();
+  x.save(); x.fillStyle = '#0b1117'; x.fillRect(408, 128, 64, 44); x.strokeStyle = '#59c7c2'; x.strokeRect(408, 128, 64, 44);
+  x.fillStyle = '#59c7c2'; x.font = "700 9px 'JetBrains Mono',monospace"; x.textAlign = 'center'; x.fillText('rand()', 440, 142); x.fillStyle = '#ffd24a'; x.font = "700 12px 'JetBrains Mono',monospace";
+  x.fillText('0.' + String(Math.floor((Math.sin(Math.floor(t * 8) * 91.7) * .5 + .5) * 9999)).padStart(4, '0'), 440, 162); x.restore();
+ }
+ if (room.portal) { // layer exit portal
+  const q = room.portal; x.save(); x.translate(q.x, q.y);
+  for (let i = 0; i < 3; i++) { x.strokeStyle = `rgba(154,245,160,${.8 - i * .22})`; x.lineWidth = 3 - i * .7; x.beginPath(); x.ellipse(0, 0, 20 + i * 5 + Math.sin(t * 3 + i) * 2, 26 + i * 5 + Math.sin(t * 3 + i) * 2, t * (i % 2 ? -1 : 1) * .6, 0, 7); x.stroke(); }
+  x.fillStyle = 'rgba(154,245,160,.22)'; x.beginPath(); x.arc(0, 0, 18, 0, 7); x.fill(); x.fillStyle = '#9af5a0'; x.font = "700 10px 'JetBrains Mono',monospace"; x.textAlign = 'center'; x.fillText('NEXT LAYER', 0, 44); x.restore();
+ }
+}
+// ---- Map: a MAP button turns the minimap on; clicking the minimap opens a bigger pop-up (the game pauses); clicking again turns the map off ----
+function mapLayout(M, mode) {
+ const ids = Object.keys(M.rooms), xs = ids.map(i => M.rooms[i].at[0]), ys = ids.map(i => M.rooms[i].at[1]);
+ const x0 = Math.min(...xs), y0 = Math.min(...ys), gw = Math.max(...xs) - x0 + 1, gh = Math.max(...ys) - y0 + 1, big = mode === 2;
+ const cw = big ? Math.min(60, Math.floor((W - 160) / gw) - 22) : 15, ch = big ? Math.round(cw * .66) : 11, gap = big ? 22 : 4;
+ const mw = gw * (cw + gap) - gap, mh = gh * (ch + gap) - gap;
+ if (big) { const pw = Math.max(mw + 80, 340), ph = mh + 130, px = (W - pw) / 2, py = (H - ph) / 2; return { x0, y0, cw, ch, gap, big, ox: px + (pw - mw) / 2, oy: py + 58, px, py, pw, ph }; }
+ return { x0, y0, cw, ch, gap, big, ox: 16, oy: 100, px: 10, py: 94, pw: mw + 12, ph: mh + 12 };
+}
+function syncMap() {
+ const b = $('#mapbtn'), a = $('#maparea'); if (!b || !a || !R?.room) return;
+ b.style.display = 'block'; b.classList.toggle('on', !!G.mapMode); b.setAttribute('aria-pressed', G.mapMode ? 'true' : 'false');
+ if (G.mapMode === 2) { R.banner = null; R.hint = null; } // keep pop-up text off the big map
+ if (!G.mapMode) { a.style.display = 'none'; return; }
+ const L = mapLayout(roomMap(), G.mapMode), pc = (v, d) => (v / d * 100).toFixed(2) + '%';
+ a.style.display = 'block';
+ if (G.mapMode === 2) Object.assign(a.style, { left: '0', top: '0', width: '100%', height: '100%' });
+ else Object.assign(a.style, { left: pc(L.px, W), top: pc(L.py, H), width: pc(L.pw, W), height: pc(L.ph, H) });
+}
+function bindMapUI() {
+ const b = $('#mapbtn'), a = $('#maparea'); if (!b || !a) return;
+ b.onpointerdown = a.onpointerdown = e => e.stopPropagation();
+ b.onclick = e => { e.stopPropagation(); G.mapMode = G.mapMode ? 0 : 1; uiSound('toggle'); syncMap(); };
+ a.onclick = e => { e.stopPropagation(); G.mapMode = G.mapMode === 1 ? 2 : 0; uiSound('toggle'); syncMap(); };
+ syncMap();
+}
+function cycleMap() { if (!R?.room) return; G.mapMode = ((G.mapMode || 0) + 1) % 3; uiSound('toggle'); syncMap(); }
+const ROOM_WORD = { S: 'ENTRY', C: 'HOSTILE', X: 'EXIT NODE', E: 'ELITE', T: 'CACHE', $: 'SHOP', B: 'BOSS' };
+function drawMapPanel(x, M, room, L) {
+ const show = new Set();
+ for (const id in M.rooms) if (M.state[id].seen) { show.add(id); for (const d in M.rooms[id].doors) show.add(M.rooms[id].doors[d]); }
+ const pos = id => { const r = M.rooms[id]; return [L.ox + (r.at[0] - L.x0) * (L.cw + L.gap), L.oy + (r.at[1] - L.y0) * (L.ch + L.gap)]; };
+ x.save();
+ if (L.big) { x.fillStyle = 'rgba(3,6,12,.8)'; x.fillRect(0, 0, W, H); }
+ x.globalAlpha = L.big ? .96 : .62; x.fillStyle = '#05080e'; x.fillRect(L.px, L.py, L.pw, L.ph); x.globalAlpha = 1;
+ if (L.big) { x.strokeStyle = WALLS[G.world?.key]?.edge || '#9af5a0'; x.lineWidth = 2; x.strokeRect(L.px, L.py, L.pw, L.ph); x.fillStyle = '#e8eefc'; x.font = "700 14px 'JetBrains Mono',monospace"; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(`LAYER MAP // ${G.sector}-${G.layer}${M.procedural ? ' // GENERATED' : ''}`, W / 2, L.py + 26); }
+ x.strokeStyle = 'rgba(160,180,200,.6)'; x.lineWidth = L.big ? 4 : 2;
+ for (const id of show) { const r = M.rooms[id]; for (const d of ['E', 'S']) if (r.doors[d] && show.has(r.doors[d])) { const [a, b] = pos(id), [e, f] = pos(r.doors[d]); x.beginPath(); x.moveTo(a + L.cw / 2, b + L.ch / 2); x.lineTo(e + L.cw / 2, f + L.ch / 2); x.stroke(); } }
+ const types = new Set();
+ for (const id of show) {
+  const r = M.rooms[id], T = ROOM_TYPES[r.type], [a, b] = pos(id), seen = M.state[id].seen, st = M.state[id]; types.add(r.type);
+  x.globalAlpha = seen ? 1 : .55; x.fillStyle = seen ? (st.cleared || T.safe ? '#243142' : '#3a2428') : '#161e29'; x.fillRect(a, b, L.cw, L.ch);
+  x.strokeStyle = T.col; x.lineWidth = id === room.id ? (L.big ? 4 : 2.5) : (L.big ? 2 : 1); x.strokeRect(a + .5, b + .5, L.cw - 1, L.ch - 1);
+  x.fillStyle = T.col; x.textAlign = 'center'; x.textBaseline = 'middle';
+  if (L.big) {
+   x.font = "700 " + Math.max(8, Math.min(11, L.cw / 6)) + "px 'JetBrains Mono',monospace"; x.fillText(ROOM_WORD[r.type] || '', a + L.cw / 2, b + L.ch / 2 - 5);
+   x.fillStyle = '#9aa7b6'; x.font = "400 9px 'JetBrains Mono',monospace";
+   x.fillText(!seen ? 'unexplored' : r.type === 'T' ? (st.looted ? 'empty' : 'unopened') : T.safe ? 'visited' : st.cleared ? 'cleared' : 'hostile', a + L.cw / 2, b + L.ch / 2 + 7);
+  } else { x.font = "700 8px 'JetBrains Mono',monospace"; x.fillText(r.type === 'C' ? '' : r.type === 'X' ? '>' : r.type, a + L.cw / 2, b + L.ch / 2 + 1); }
+  if (id === room.id) { x.fillStyle = '#fff'; if (L.big) { x.font = "700 9px 'JetBrains Mono',monospace"; x.fillText('YOU ARE HERE', a + L.cw / 2, b + L.ch + 9); } else { x.beginPath(); x.arc(a + L.cw / 2, b + L.ch / 2, 2, 0, 7); x.fill(); } }
+  x.globalAlpha = 1;
+ }
+ if (L.big) { // legend + hint
+  let lx = L.px + 24; const ly = L.py + L.ph - 36; x.textAlign = 'left'; x.font = "400 10px 'JetBrains Mono',monospace";
+  for (const t of ['S', 'C', 'X', 'E', 'T', '$', 'B']) if (types.has(t)) { x.fillStyle = ROOM_TYPES[t].col; x.fillRect(lx, ly - 4, 8, 8); x.fillStyle = '#c3ccd8'; const w = ROOM_WORD[t]; x.fillText(w, lx + 12, ly); lx += 22 + w.length * 6.2; }
+  x.fillStyle = '#7f93b8'; x.textAlign = 'center'; x.fillText('click anywhere to close the map', W / 2, L.py + L.ph - 14);
+ }
+ x.restore();
+}
+function drawRoomHud(x) {
+ const room = R.room, M = roomMap(), c = R.col;
+ x.save(); x.textAlign = 'right'; x.textBaseline = 'middle'; x.font = "700 11px 'JetBrains Mono',monospace";
+ x.fillStyle = room.T.col; x.fillText(room.T.n, W - 10, 43);
+ x.fillStyle = '#e2b24a'; x.fillText(`CYCLES ${G.cycles}`, W - 10, 57);
+ const it = []; if (G.items.restore) it.push(`[Q] ${SHOP.restore.name} x${G.items.restore}`); if (G.items.patch) it.push(`[R] ${SHOP.patch.name} x${G.items.patch}`);
+ if (it.length) { x.fillStyle = room.cleared ? c.chip : c.mu; x.fillText(it.join('  '), W - 10, 71); }
+ x.restore();
+ if (G.mapMode) drawMapPanel(x, M, room, mapLayout(M, G.mapMode));
+ if (room.near && R.end === 0 && !R.shopOpen && G.mapMode !== 2) { x.save(); x.fillStyle = 'rgba(5,8,14,.8)'; const tw = 160; x.fillRect(W / 2 - tw / 2, H - 46, tw, 20); x.fillStyle = '#e2b24a'; x.font = "700 11px 'JetBrains Mono',monospace"; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(room.near.label, W / 2, H - 36); x.restore(); }
+ if (R.t < .35) { x.save(); x.globalAlpha = 1 - R.t / .35; x.fillStyle = '#000'; x.fillRect(0, 0, W, H); x.restore(); }
+}
+
+// ---- Cycle Shop (Undertale-style menu: merchant portrait, typewriter dialogue, BUY / SLOTS / LEAVE) ----
+function buildShopStock() {
+ const pool = [...Object.keys(SPELLS), ...Object.keys(MODS)].filter(k => defOf(k).r <= SHOP.cardMaxRarity);
+ const cards = shuffle(pool).slice(0, SHOP.cardCount).map(k => ({ k, price: SHOP.cardPrice[defOf(k).r] ?? 10, sold: false }));
+ if (Math.random() < SHOP.saleChance && cards.length) { const c = cards[ri(cards.length)]; c.price = Math.max(1, Math.round(c.price / 2)); c.sale = true; }
+ return { cards, restore: SHOP.restore.stock, patch: SHOP.patch.stock, rerolls: 0, crates: 0 };
+}
+const SHOP_LINES = {
+ hello: ['Sweeping up losing streaks. Welcome to the Cycle Shop.', 'Cycles in, luck out. Browse, spin, just do not touch the broom.', 'Every odd is published and all sales are final. What can I compile for you?'],
+ buy: ['Everything here is hot-swappable.', 'Prices are fixed. The sales are rand().'],
+ slots: ['The odds are on the board. I do not cheat, I just sweep.', 'One roll per spin. rand() has no memory, and neither do I.'],
+ poor: ['Insufficient Cycles. Try winning some.', 'Error 402: payment required.'],
+ thanks: ['Transaction committed.', 'Pleasure doing business. Keep the change. There is none.'],
+ bye: ['Come back when your cache is full.', 'Segfault you later.']
+};
+const sline = k => pick(SHOP_LINES[k]);
+function openShop(mode = 'main') {
+ if (R.shopOpen) return;
+ R.shopOpen = 1; keys = {}; joy = null; dashReq = false; mouseFire = 0; mobileFire = 0; mobileContinuous = 0;
+ G.shop = { mode: mode === 'slots' ? 'slots' : 'buy', busy: false, spin: null, bet: SLOTS.bets[0], say: '', typed: 0, msg: '' };
+ const ov = document.createElement('div'); ov.id = 'shopov'; $('#app').appendChild(ov);
+ ov.addEventListener('click', shopClick);
+ shopSay(mode === 'slots' ? sline('slots') : sline('hello'));
+ shopRender();
+ const cv = ov.querySelector('#sh-port');
+ const tick = () => { if (!R.shopOpen || !cv.isConnected) return; const g = cv.getContext('2d'); g.clearRect(0, 0, cv.width, cv.height); drawMerchant(g, 72, 122, 2, performance.now() / 1000); requestAnimationFrame(tick); };
+ requestAnimationFrame(tick);
+}
+function closeShop() {
+ if (!R || !R.shopOpen) return;
+ finalizeSpin(); // never lose (or double-pay) a spin that is still rolling
+ clearInterval(G.shop?.typer); R.shopOpen = 0; $('#shopov')?.remove(); G.shop = null; uiSound('back');
+ R.hint = { t: 1.6, s: 'Cycles: ' + G.cycles };
+}
+function shopSay(text) {
+ const S = G.shop; clearInterval(S.typer); S.say = text; S.typed = 0;
+ S.typer = setInterval(() => { // typewriter with a blip every few characters
+  S.typed++; const el = $('#sh-dlg'); if (el) el.textContent = S.say.slice(0, S.typed) + (S.typed < S.say.length ? '_' : '');
+  if (S.typed % 3 === 1) uiSound('tick');
+  if (S.typed >= S.say.length) clearInterval(S.typer);
+ }, 26);
+}
+function shopRender() {
+ const ov = $('#shopov'), S = G.shop, st = R.room.shop; if (!ov) return;
+ const tile = (data, col, tag, name, desc, foot, dis) => `<button class="card u" data-sh="${data}" ${dis ? 'disabled' : ''} style="border-top-color:${col}"><em style="color:${col}">${tag}</em><b>${name}</b><small>${desc}</small><span class="sh-pr">${foot}</span></button>`;
+ let body = '';
+ if (S.mode === 'buy') {
+  const cards = st.cards.map((c, i) => `<div class="sh-slot">${cardH(c.k, `data-sh="card:${i}" ${c.sold ? 'disabled' : ''}`, false, 1, '', G)}<div class="sh-tag ${c.sold ? 'sold' : ''}">${c.sold ? 'SOLD' : c.price + ' CY'}${c.sale && !c.sold ? `<em>sale! rand() &lt; ${SHOP.saleChance}</em>` : ''}</div></div>`).join('');
+  const odds = SHOP.crate.odds.map(([p, r]) => `rand() &lt; ${p} &rarr; ${RAR[r]}`).join(' | ');
+  body = `<div class="sh-sec">Cards</div><div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">${cards}</div><div class="sh-sec">Supplies</div><div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">
+   ${tile('restore', RC[1], 'CONSUMABLE', SHOP.restore.name, `${SHOP.restore.d} (${st.restore} left)`, st.restore <= 0 ? 'SOLD OUT' : SHOP.restore.price + ' CY', st.restore <= 0)}
+   ${tile('patch', RC[1], 'CONSUMABLE', SHOP.patch.name, `${SHOP.patch.d} (${st.patch} left)`, st.patch <= 0 ? 'SOLD OUT' : SHOP.patch.price + ' CY', st.patch <= 0)}
+   ${tile('crate', RC[3], 'RNG', SHOP.crate.name, `${SHOP.crate.d} ${odds}`, SHOP.crate.price + ' CY', false)}
+   ${tile('reroll', RC[2], 'RNG', 'REROLL_STOCK()', `New card stock (${SHOP.maxRerolls - st.rerolls} left). Supplies stay the same.`, SHOP.rerollPrice + ' CY', st.rerolls >= SHOP.maxRerolls)}</div>`;
+ } else {
+  const sp = S.spin, reels = sp ? sp.shown : ['?', '?', '?'];
+  const rows = slotTable().map(o => `<tr><td>rand() &lt; ${o.thr.toFixed(2)}</td><td>${o.n}</td><td>x${o.mult}</td></tr>`).join('') + '<tr><td>else</td><td>no match</td><td>x0</td></tr>';
+  body = `<div class="sh-slots"><div class="sh-reels">${reels.map(r => `<span>${r}</span>`).join('')}</div>
+   <div class="sh-bets">${SLOTS.bets.map(b => `<button class="btn sm ${S.bet === b ? '' : 'g'}" data-sh="bet:${b}" ${S.busy ? 'disabled' : ''}>bet ${b}</button>`).join('')}<button class="btn sm" style="background:var(--mult)" data-sh="spin" ${S.busy || G.cycles < S.bet ? 'disabled' : ''}>${S.busy ? 'spinning...' : 'spin()'}</button></div>
+   <table class="sh-odds"><tr><th>condition (one roll)</th><th>result</th><th>pays</th></tr>${rows}</table><p class="sh-note">Expected return ${(slotRTP() * 100).toFixed(0)}% of every bet. Winnings are paid when the reels stop.</p></div>`;
+ }
+ ov.innerHTML = `<div class="sh-box"><div class="sh-head"><canvas id="sh-port" width="128" height="128"></canvas><div class="sh-talk"><div class="sh-name">MERCHANT.exe <span>// cycle shop</span></div><div id="sh-dlg">${S.say.slice(0, S.typed)}</div>
+  <div class="sh-bar"><span class="sh-pill">CYCLES <b id="sh-cy">${G.cycles}</b></span><span class="sh-pill">${SHOP.restore.name} x${G.items.restore}</span><span class="sh-pill">${SHOP.patch.name} x${G.items.patch}</span></div></div></div>
+  ${body}<div class="sh-menu"><button class="btn ${S.mode === 'buy' ? '' : 'g'}" data-sh="go:buy" ${S.busy ? 'disabled' : ''}>buy()</button><button class="btn ${S.mode === 'slots' ? '' : 'g'}" data-sh="go:slots" ${S.busy ? 'disabled' : ''}>slots()</button><button class="btn g" data-sh="leave" ${S.busy ? 'disabled' : ''}>leave()</button></div></div>`;
+}
+function finalizeSpin() { // idempotent: the timer and closeShop() can both call it, and the payout is only ever applied once
+ const S = G.shop; if (!S || !S.spin || S.spin.paid) return;
+ const sp = S.spin; sp.paid = true; clearInterval(sp.timer); sp.shown = sp.res.sym; S.busy = false;
+ if (sp.res.payout > 0) { G.cycles += sp.res.payout; sfx('pickup'); S.say = sp.res.id === 'jackpot' ? 'JACKPOT?! THE HOUSE IS... FINE. +' + sp.res.payout + ' CYCLES.' : sp.res.n + '! +' + sp.res.payout + ' CYCLES.'; }
+ else { S.say = 'NO MATCH. THE BROOM SWEEPS UP YOUR ' + sp.res.bet + ' CY.'; }
+ if (R.shopOpen) { shopSay(S.say); shopRender(); }
+}
+function shopClick(e) {
+ const b = e.target.closest('[data-sh]'); if (!b || b.disabled) return; e.stopPropagation();
+ const S = G.shop, st = R.room.shop, [k, arg] = b.dataset.sh.split(':');
+ if (S.busy) return;
+ if (k === 'leave') { closeShop(); return; }
+ if (k === 'go') { S.mode = arg; shopSay(sline(arg === 'buy' ? 'buy' : 'slots')); uiSound('select'); shopRender(); return; }
+ if (k === 'bet') { S.bet = +arg; uiSound('select'); shopRender(); return; }
+ if (k === 'spin') {
+  if (G.cycles < S.bet) { shopSay(sline('poor')); uiSound('deny'); return; }
+  G.cycles -= S.bet; // the wager leaves the balance before the roll, and the roll is made exactly once
+  const res = spinSlots(S.bet);
+  S.busy = true; S.spin = { res, shown: ['-', '-', '-'], paid: false, t0: performance.now() };
+  S.spin.timer = setInterval(() => { // reels land one after another
+   const el = performance.now() - S.spin.t0; S.spin.shown = res.sym.map((s, i) => el > 500 + i * 330 ? s : SLOTS.symbols[ri(4)]);
+   const r = $('#shopov')?.querySelectorAll('.sh-reels span'); if (r) S.spin.shown.forEach((s, i) => { r[i].textContent = s; });
+   if (el > 500 + 2 * 330 + 120) finalizeSpin();
+  }, 70);
+  uiSound('select'); shopRender(); return;
+ }
+ let cost = 0, ok = false;
+ if (k === 'card') { const c = st.cards[+arg]; if (!c || c.sold) return; cost = c.price; if (G.cycles >= cost) { G.cycles -= cost; c.sold = true; const nc = mk(c.k); G.deck.push(nc); G.disc.push(nc); calcST(); ok = true; } }
+ else if (k === 'restore' || k === 'patch') { cost = SHOP[k].price; if (st[k] <= 0) return; if (G.cycles >= cost) { G.cycles -= cost; st[k]--; G.items[k]++; ok = true; } }
+ else if (k === 'crate') {
+  cost = SHOP.crate.price;
+  if (G.cycles >= cost) {
+   G.cycles -= cost; let r = SHOP.crate.odds[SHOP.crate.odds.length - 1][1], roll = Math.random(), acc = 0;
+   for (const [p, rr] of SHOP.crate.odds) { acc += p; if (roll < acc) { r = rr; break; } }
+   let pool = []; for (let q = r; q >= 0 && !pool.length; q--) pool = [...Object.keys(SPELLS), ...Object.keys(MODS)].filter(kk => defOf(kk).r === q);
+   const nc = mk(pick(pool)); G.deck.push(nc); G.disc.push(nc); calcST(); ok = true; shopSay(`THE CRATE HISSES. ${defOf(nc.k).n} (${RAR[defOf(nc.k).r]}) ADDED TO YOUR DECK.`); uiSound('reward'); shopRender(); return;
+  }
+ }
+ else if (k === 'reroll') { cost = SHOP.rerollPrice; if (st.rerolls >= SHOP.maxRerolls) return; if (G.cycles >= cost) { G.cycles -= cost; st.rerolls++; st.cards = buildShopStock().cards; ok = true; } }
+ if (!ok) { shopSay(sline('poor')); uiSound('deny'); return; }
+ shopSay(sline('thanks')); uiSound('reward'); shopRender();
 }
 
 function spawnE(k, x, y, o = {}) {
@@ -3937,8 +4408,12 @@ function updMisc(dt) {
 }
 
 function step(dt) {
+ if (R.shopOpen || (R.room && G.mapMode === 2)) { updMisc(dt); return; }
  if (R.sandbox && R.sbDash) R.p.dcd = 0;
- updP(dt); updSpawn(dt); updCasts(dt); updPr(dt); updEn(dt); updMisc(dt);
+ updP(dt);
+ if (R.room && R.room.cleared) { updPr(dt); updMisc(dt); roomTick(dt); return; } // clear or safe room: just walk, use doors, interact
+ updSpawn(dt); updCasts(dt); updPr(dt); updEn(dt); updMisc(dt);
+ if (R.room && !R.end && R.en.length === 0 && R.budget <= .3) { roomClear('p'); return; }
  if (!R.end && R.en.length === 0 && R.budget <= .3 && (!R.boss || R.bossDead)) {
   R.end = 1; G.cfg.rmode = 'p';
   if (R.boss) { stopMusic(1.4); }
@@ -3957,6 +4432,7 @@ function objectives(dt) {
  }
 }
 function finish(m) {
+ if (R.room) { roomClear(m); return; }
  R.end = 1; G.cfg.rmode = m; R.en = []; R.eb = []; R.tg = [];
  R.banner = { t: 1.2, s: m === 'h' ? 'HACK COMPLETE' : 'DATA RECOVERED: BONUS' };
  sfx('objective');
@@ -5335,6 +5811,7 @@ function draw(x) {
  drawNodes(x, A, R.t, G.world?.c?.[0] || '#9dff7a');
  drawSegfaultScene(x);
  if (A.z) drawLabLive(x, A, R.t); // lab: flickering screens / LEDs / error traces (A = ARENAS[arena])
+ if (R.room) drawRoomLayer(x);
 
  if (R.term) {
   const t = R.term;
@@ -5927,14 +6404,15 @@ function draw(x) {
  x.textBaseline = 'middle';
  x.font = "700 11px 'JetBrains Mono',monospace";
  x.fillStyle = c.ink;
- x.fillText(`${G.sector}-${G.layer} ${G.world?.n || 'Sector'}: ${A.n}${G.cfg?.elite ? ' [ELITE]' : ''}`, W - 10, 15);
+ x.fillText(`${G.sector}-${G.layer} ${G.world?.n || 'Sector'}: ${A.n}${G.cfg?.elite && !R.room?.cleared ? ' [ELITE]' : ''}`, W - 10, 15);
  x.fillText(`bugs ${R.en.length + (R.boss ? 0 : Math.ceil(Math.max(0, R.budget) / 1.2))}`, W - 10, 29);
 
  if (R.term) {
   x.fillStyle = c.chip;
-  x.fillText(`hack ${Math.round((R.term.p || 0) * 100)}%  data ${R.pk.filter(k => k.got).length}/3`, W - 10, 43);
+  x.fillText(`hack ${Math.round((R.term.p || 0) * 100)}%  data ${R.pk.filter(k => k.got).length}/3`, W - 10, R.room ? 85 : 43);
  }
 
+ if (R.room) drawRoomHud(x);
  const bs = R.en.find(e => e.boss);
  // ----- Boss HP Display (Settings): 0 = HP bar, 1 = HP bar + %, 2 = actual HP / max (%) -----
  const pctTxt = (hp, m) => {
@@ -6374,7 +6852,7 @@ const sec = () => {
 function head() {
  const pas = Object.keys(G.u).filter(k => G.u[k]).map(k => `<span style="color:${RC[UPG[k]?.r || 0]}" title="${UPG[k]?.d || ''}">${UPG[k]?.n || k}${G.u[k] > 1 ? ' x' + G.u[k] : ''}</span>`).join('');
  const currSh = Math.ceil(G.sh != null ? G.sh : ST.shmax);
- return `<div class="top">${sec()}<span>${HOSTS[G.host].n}</span><span style="color:var(--mult)">HP ${Math.ceil(G.hp)}/${G.max}</span><span style="color:var(--chip)">SH ${currSh}/${ST.shmax}</span><span>deck ${G.deck.length}</span></div><div class="pas">${pas || '<span style="color:var(--mute)">no upgrades yet</span>'}</div>`;
+ return `<div class="top">${sec()}<span>${HOSTS[G.host].n}</span><span style="color:var(--mult)">HP ${Math.ceil(G.hp)}/${G.max}</span><span style="color:var(--chip)">SH ${currSh}/${ST.shmax}</span><span>deck ${G.deck.length}</span><span style="color:var(--gold)" title="Cycles: in-run currency">CYCLES ${G.cycles ?? 0}</span></div><div class="pas">${pas || '<span style="color:var(--mute)">no upgrades yet</span>'}</div>`;
 }
 
 
@@ -6567,12 +7045,7 @@ export function render() {
   return;
  }
  if (v === 'run') {
-  A.innerHTML = `<div class="wrap"><canvas id="cv" width="${W}" height="${H}"></canvas><div id="mobile-controls" aria-label="Mobile combat controls"><div id="aim-pad" role="slider" aria-label="Drag to aim" aria-valuetext="Aim direction"><span>AIM</span></div><button id="combat-toggle" aria-pressed="true">COMBAT ON</button><button id="mobile-fire">FIRE</button><button id="continuous-fire" aria-pressed="false">AUTO OFF</button></div><button id="intro-next" type="button">NEXT TEXT</button><button id="dash" aria-label="Dash">DASH</button><button id="pausebtn" data-act="pause" aria-label="${G.sandbox ? 'Sandbox test cheats' : 'Pause'}">${G.sandbox ? 'TEST MENU' : 'II'}</button></div>${G.sandbox ? '<p class="lbl" style="color:var(--mult)">SANDBOX // NON-CANON // NOT LORE-RELATED // NO PROGRESSION</p>' : ''}<p class="rot-hint">Tip: rotate your phone sideways, or tap the fullscreen button, for a bigger arena.</p><p class="lbl" style="margin-top:6px">Move: WASD / drag. Dash: Space / DASH. Aim with mouse or Host facing. Left-click / Z toggles combat; hold X / right-click to fire every card at its own rate. Mobile: drag AIM, tap FIRE or toggle AUTO.</p>`;
-  return;
- }
- if (v === 'choice') {
-  const c = G.cfg;
-  A.innerHTML = head() + `${G.sandbox ? '<p class="lbl" style="color:var(--mult)">SANDBOX // NON-CANON // NO PROGRESSION</p>' : ''}<h2>Round ${c.i}: choose your risk</h2><div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))"><button class="card" data-risk="0" style="border-top-color:${RC[1]}"><b>SAFE ROUND</b><small>Standard bugs. Standard rewards.</small></button><button class="card" data-risk="1" style="border-top-color:${RC[4]}"><b>ELITE HUNT</b><small>An elite joins the swarm. Rewards are uncommon or better.</small></button></div>${G.sandbox ? '<button class="btn g" data-act="sandbox-skip">SKIP TEST ROUND</button>' : ''}`;
+  A.innerHTML = `<div class="wrap"><canvas id="cv" width="${W}" height="${H}"></canvas><div id="mobile-controls" aria-label="Mobile combat controls"><div id="aim-pad" role="slider" aria-label="Drag to aim" aria-valuetext="Aim direction"><span>AIM</span></div><button id="combat-toggle" aria-pressed="true">COMBAT ON</button><button id="mobile-fire">FIRE</button><button id="continuous-fire" aria-pressed="false">AUTO OFF</button></div><button id="intro-next" type="button">NEXT TEXT</button><button id="interact" type="button" aria-label="Interact">TALK</button><button id="dash" aria-label="Dash">DASH</button><button id="mapbtn" type="button" aria-label="Toggle map" aria-pressed="false">MAP</button><div id="maparea" role="button" aria-label="Enlarge or close the map"></div><button id="pausebtn" data-act="pause" aria-label="${G.sandbox ? 'Sandbox test cheats' : 'Pause'}">${G.sandbox ? 'TEST MENU' : 'II'}</button></div>${G.sandbox ? '<p class="lbl" style="color:var(--mult)">SANDBOX // NON-CANON // NOT LORE-RELATED // NO PROGRESSION</p>' : ''}<p class="rot-hint">Tip: rotate your phone sideways, or tap the fullscreen button, for a bigger arena.</p><p class="lbl" style="margin-top:6px">Move: WASD / drag. Dash: Space / DASH. Aim with mouse or Host facing. Left-click / Z toggles combat; hold X / right-click to fire every card at its own rate. Mobile: drag AIM, tap FIRE or toggle AUTO.</p>`;
   return;
  }
  if (v === 'world') {
@@ -6584,7 +7057,7 @@ export function render() {
  }
  if (v === 'reward') {
   const c = G.cfg, cats = [['c', 'Spell / Modifier', 'New cards for your deck'], ['u', 'Passive', 'A permanent run upgrade'], ['d', 'Deck & Hand', 'Slots, hand size, healing']];
-  A.innerHTML = head() + `<h2>${c.boss ? BOSSES[c.boss].n + ' defeated' : 'Layer cleared'}</h2>` + (G.cat ? `<div class="grid">${G.offers.map((o, i) => cardH(o.k, `data-pick="${i}"`, o.t === 'u', 1, '', G)).join('')}</div>` : `<p class="lbl">Choose a reward type.</p><div class="grid">${cats.map(k => `<button class="card" data-cat="${k[0]}" style="border-top-color:var(--chip)"><b>${k[1]}</b><small>${k[2]}</small></button>`).join('')}</div>`);
+  A.innerHTML = head() + `<h2>${c.boss ? BOSSES[c.boss].n + ' defeated' : G.rewardCtx ? (G.rewardCtx.kind === 'chest' ? 'Treasure cache opened' : 'Challenge cleared: Elite Hunt reward') : 'Layer cleared'}</h2>${G.rewardCtx && G.rewardNote ? `<p class="lbl">${G.rewardNote}</p>` : ''}` + (G.cat ? `<div class="grid">${G.offers.map((o, i) => cardH(o.k, `data-pick="${i}"`, o.t === 'u', 1, '', G)).join('')}</div>` : `<p class="lbl">Choose a reward type.</p><div class="grid">${cats.map(k => `<button class="card" data-cat="${k[0]}" style="border-top-color:var(--chip)"><b>${k[1]}</b><small>${k[2]}</small></button>`).join('')}</div>`);
   return;
  }
 
@@ -6616,12 +7089,12 @@ export function render() {
     <button class="btn g sm tb-btn ${isDrawOpen ? 'act' : ''}" data-act="view-draw">🗂️ Draw Pile (${G.draw.length})</button>
     <button class="btn g sm tb-btn ${isDiscOpen ? 'act' : ''}" data-act="view-disc">🗑️ Recycle Bin (${G.disc.length})</button>
     <button class="btn g sm tb-btn ${isDeckOpen ? 'act' : ''}" data-act="view-deck">📦 Full Deck (${G.deck.length})</button>
-    <button class="btn g sm" data-act="redraw" ${G.redrawUsed ? 'disabled' : ''} title="Move hand to Recycle Bin and draw fresh cards">🔄 Redraw (${G.redrawUsed ? '0' : '1'})</button>
+    <button class="btn g sm" data-act="redraw" ${(G.cycles ?? 0) < redrawCost(G.layerRedraws || 0) ? 'disabled' : ''} title="Move hand to Recycle Bin and draw fresh cards. Costs Cycles; the price climbs each time this layer.">🔄 Redraw (${redrawCost(G.layerRedraws || 0)} CY)</button>
   </div>
 
   <div class="panel">
-    <pre style="color:var(--ink)">INCOMING // ${ARENAS[c.arena].n}${c.elite ? '  [ELITE]' : ''}</pre>
-    <div style="margin-top:4px;font-size:11px">${c.boss ? `<b style="color:var(--mult)">${BOSSES[c.boss].n}</b>: ${BOSSES[c.boss].i}` : 'Squash incoming bugs. Build persists across rounds!'}</div>
+    <pre style="color:var(--ink)">INCOMING // ${c.bossKey ? 'BOSS DOOR AHEAD' : ARENAS[c.arena].n}${c.elite ? '  [ELITE]' : ''}</pre>
+    <div style="margin-top:4px;font-size:11px">${(c.boss || c.bossKey) ? `<b style="color:var(--mult)">${BOSSES[c.boss || c.bossKey].n}</b>: ${BOSSES[c.boss || c.bossKey].i}` : 'Squash incoming bugs. Build persists across rounds!'}</div>
   </div>
 
   <p class="lbl">Pipeline (modifiers affect the spell to their right). Tap a card to select it, tap another to move it to that spot, or an empty slot to move it to the end. Double-tap to remove. Cards with a bar underneath were used last round, so they go to the Recycle Bin.</p>
@@ -6694,7 +7167,7 @@ $('#app').addEventListener('click', e => {
   return;
  }
 
- const t = e.target.closest('[data-act],[data-host],[data-hand],[data-slot],[data-pick],[data-risk],[data-cat],[data-world],[data-set],[data-setv],[data-slotend]');
+ const t = e.target.closest('[data-act],[data-host],[data-hand],[data-slot],[data-pick],[data-cat],[data-world],[data-set],[data-setv],[data-slotend]');
  if (!t) return;
  const d = t.dataset;
  uiSound(d.hand != null ? 'card_pick' : (d.slot != null || d.slotend != null) ? 'card_place' : d.pick != null ? 'reward' : (d.host || d.cat != null || d.world != null) ? 'select' : (d.set != null || d.setv != null || d.act === 'mute') ? 'toggle' : (d.act === 'run' || d.act === 'start' || d.act === 'initialize') ? 'start' : (d.act === 'clear' || d.act === 'title' || d.act === 'unfuse') ? 'back' : (d.act === 'view-draw' || d.act === 'view-disc' || d.act === 'view-deck' || d.act === 'settings') ? 'open' : 'click');
@@ -6758,8 +7231,9 @@ $('#app').addEventListener('click', e => {
  }
 
  if (d.act === 'redraw') {
-  if (G.redrawUsed) return;
-  G.redrawUsed = 1;
+  const cost = redrawCost(G.layerRedraws || 0);
+  if ((G.cycles ?? 0) < cost) { G.msg = `Redraw costs ${cost} Cycles (you have ${G.cycles ?? 0}).`; uiSound('deny'); render(); return; }
+  G.cycles -= cost; G.layerRedraws = (G.layerRedraws || 0) + 1;
   G.disc.push(...G.hand);
   G.hand = [];
   drawN(6 + ST.hand);
@@ -6872,8 +7346,6 @@ $('#app').addEventListener('click', e => {
   G.sel = 0;
   G.msg = n ? n + ' used card' + (n > 1 ? 's' : '') + ' went to the Recycle Bin.' : '';
   render();
- } else if (d.risk != null) {
-  G.cfg.elite = d.risk === '1'; draft();
  } else if (d.hand != null) {
   if (G.fm) {
    const c = G.hand[+d.hand];
@@ -7006,6 +7478,7 @@ addEventListener('keydown', e => {
    return;
   }
  }
+ if (G.view === 'run' && R?.shopOpen) { if (k === 'escape') { e.preventDefault(); closeShop(); } return; } // the shop menu owns the keyboard while it is open
  if ((k === '`' || e.code === 'Backquote') && G.view === 'run' && R && !R.end) { // ` toggles the pause / settings menu (Esc is left alone: it exits fullscreen)
   e.preventDefault(); e.stopPropagation();
   if (!e.repeat) togglePause();
@@ -7018,6 +7491,9 @@ addEventListener('keydown', e => {
   return;
  }
  if (G.view === 'run' && R && R.seg && !R.bossIntro && ['1', '2', '3', '4'].includes(k) && R.seg.relays.some(r => r.qte)) { e.preventDefault(); if (!e.repeat) segQteInput(+k - 1); return; }
+ if (G.view === 'run' && R?.room && G.mapMode === 2 && k === 'escape') { e.preventDefault(); G.mapMode = 0; syncMap(); return; }
+ if (G.view === 'run' && R?.room && !e.repeat && k === 'm') { e.preventDefault(); cycleMap(); return; }
+ if (G.view === 'run' && R?.room && !R.bossIntro && !e.repeat && (k === 'e' || k === 'q' || k === 'r')) { e.preventDefault(); if (k === 'e') interact(); else useItem(k === 'q' ? 'restore' : 'patch'); return; }
  if (k === 'z' && G.view === 'run' && R && !R.bossIntro && !R.end) {
   e.preventDefault();
   if (!e.repeat) setCombatMode(!R.combatMode);
