@@ -2,7 +2,7 @@ import { W, H, GW, GH, PLAN, CHAOS, setArenaSize } from './constants.js';
 import { RAR, RC, SPELLS, MODS, UPG, HOSTS, DK, WORLDS, EN, ARENAS, BOSSES, RACE, LEAK, SEGFAULT, PLAYER_SHIELD } from './data.js';
 import { ROOM_TYPES, CYCLES, SHOP, SLOTS, redrawCost, slotHandTable, slotRTP, spinSlots, buildLayerMap, buildBossMap, ENTRY_SPOT, DIR_OPP } from './rooms.js';
 import { WANDS, wandOf, wandAccepts, bwCost, bwMaxFor, bwRegen, clampBW, CRYO, WAND_ACQ, wandsOffered, canStoreWand } from './wands.js';
-import { wandIconHTML, drawWandSprite, wandCanvas } from './wandart.js';
+import { wandIconHTML, wandCanvas } from './wandart.js';
 import { $, ri, pick, cl, shuffle, css, mk, defOf, isMod, maxV, okMod, wo, xText, xl, cardH } from './helpers.js';
 import { renderOSWindows } from './probability.js';
 import { drawNodes } from './themes.js';
@@ -6459,7 +6459,6 @@ function draw(x) {
  x.fillStyle = hc;
  x.fillText(hg, 0, 0);
  x.restore();
- if (!R.deathSequence && G.wand) { x.globalAlpha = (p.inv > 0 && p.dash <= 0 && ((R.t * 24) | 0) % 2 ? .4 : 1); drawWandSprite(x, G.wand, p.x + Math.cos(aimAngle()) * 17, p.y + Math.sin(aimAngle()) * 17, aimAngle(), 1.3); } // the equipped wand, held toward the aim
  x.globalAlpha = 1;
 
  x.textAlign = 'center';

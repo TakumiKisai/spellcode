@@ -15,8 +15,3 @@ const urls = {};
 export const wandIconURL = id => urls[id] ||= wandCanvas(id).toDataURL();
 // <img> for HTML UIs. Rotated so the wand reads as an item icon rather than a thin bar.
 export const wandIconHTML = (id, px = 4, rot = -35) => `<img class="wand-ico" alt="" src="${wandIconURL(id)}" style="width:${WAND_PX.w * px}px;height:${WAND_PX.h * px}px;image-rendering:pixelated;transform:rotate(${rot}deg)">`;
-// Canvas: draw the wand centred on (cx, cy), pointing along `ang`.
-export function drawWandSprite(x, id, cx, cy, ang, s = 1) {
- x.save(); x.translate(cx, cy); x.rotate(ang); if (Math.abs(ang) > Math.PI / 2) x.scale(1, -1); // keep the gem on top when aiming left
- x.imageSmoothingEnabled = false; x.drawImage(wandCanvas(id), -WAND_PX.w * s / 2, -WAND_PX.h * s / 2, WAND_PX.w * s, WAND_PX.h * s); x.restore();
-}
