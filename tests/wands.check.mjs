@@ -1,5 +1,5 @@
 import { SPELLS } from '../src/data.js';
-import { WANDS, wandAccepts, applyWand, bwCost, bwMaxFor, bwRegen, clampBW, BW_CFG, CRYO } from '../src/wands.js';
+import { WANDS, WAND_ACQ, wandsOffered, canStoreWand, specialWands, wandAccepts, applyWand, bwCost, bwMaxFor, bwRegen, clampBW, BW_CFG, CRYO } from '../src/wands.js';
 let fails = 0; const bad = m => { fails++; console.log('FAIL:', m); }, ok = (c, m) => { if (!c) bad(m); };
 const mkA = sp => ({ ...SPELLS[sp], rate: SPELLS[sp].rate, rep: 1, pc: 1, area: 1, size: 1, burn: SPELLS[sp].burn || 0, freeze: 0, pierce: SPELLS[sp].pierce || 0, dmg: SPELLS[sp].dmg });
 // compatibility
@@ -33,4 +33,15 @@ let bw = 100; for (let i = 0; i < 600; i++) bw = clampBW(bw + bwRegen({}) / 60, 
 bw = 5; const cost = bwCost(c); const can = cost <= bw; ok(can, 'sanity'); bw = 2; ok(!(cost <= bw), 'insufficient BW is refused');
 // every wand definition is well formed (extensible registry)
 for (const id in WANDS) { const w = WANDS[id]; ok(w.n && w.short && w.col && w.accepts, id + ' missing fields'); }
+// acquisition / storage rules
+ok(JSON.stringify(specialWands())==='["cryomancer"]', 'only Cryomancer is a specialized wand');
+ok(wandsOffered(['universal'], []).join()==='cryomancer', 'unowned wand is offered');
+ok(wandsOffered(['universal','cryomancer'], []).length===0, 'owned wand is never offered again');
+ok(wandsOffered(['universal'], ['cryomancer']).length===0, 'wand in Storage is never offered (no duplicates)');
+ok(WAND_ACQ.chest>0&&WAND_ACQ.chest<1&&WAND_ACQ.deck>0&&WAND_ACQ.deck<1, 'chest/deck wand chances are partial, never guaranteed');
+ok(!canStoreWand('universal','cryomancer',['universal','cryomancer']), 'Universal can never be stored');
+ok(!canStoreWand('cryomancer','cryomancer',['universal','cryomancer']), 'equipped wand can never be stored');
+ok(canStoreWand('cryomancer','universal',['universal','cryomancer']), 'spare wand can be stored');
+ok(!canStoreWand('cryomancer','universal',['universal']), 'cannot store a wand you do not own');
+for (const id in WANDS) ok(Array.isArray(WANDS[id].art) && WANDS[id].art.length>5, id+' has pixel art');
 console.log(fails ? fails + ' FAILED' : 'ALL WAND/BW CHECKS PASSED'); process.exit(fails ? 1 : 0);

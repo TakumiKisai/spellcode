@@ -1,5 +1,7 @@
 import { defOf, maxV, xText, wo, isMod } from './helpers.js';
 import { RC, RAR } from './data.js';
+import { wandOf } from './wands.js';
+import { wandIconHTML } from './wandart.js';
 
 export function groupCards(list) {
  const map = new Map();
@@ -58,12 +60,53 @@ function renderDrawBody(G, handSize) {
 
  return `
   <div style="color:var(--mute);font-size:11px;margin-bottom:10px">${N} cards left in draw pile • Upcoming round draws ${H} cards into hand</div>
-  ${N === 0 ? '<div class="center" style="padding:32px;color:var(--mute)">Draw pile is empty!<br>Your Recycle Bin will shuffle into draw on the next pull.</div>' : `
+  ${N === 0 ? '<div class="center" style="padding:32px;color:var(--mute)">Draw pile is empty!<br>Your Storage cards will shuffle into draw on the next pull.</div>' : `
     <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(130px,1fr))">
       ${rows}
     </div>
   `}
  `;
+}
+
+// STORAGE (formerly the Recycle Bin): two independent collections. Cards = G.disc, Wands = G.binWands. No handler touches both.
+function renderWandStorage(G) {
+ const W = G.binWands || [], armed = !!G.binWandConfirm;
+ const rows = W.map(id => {
+  const w = wandOf(id);
+  return `
+   <div class="card" style="border-top-color:${w.col};cursor:default;position:relative">
+     <div style="text-align:center;padding:6px 0 2px;height:46px">${wandIconHTML(id, 3, -35)}</div>
+     <em style="color:${w.col}">WAND</em>
+     <b>${w.n}</b>
+     <small>${w.d}</small>
+     <div style="margin-top:auto;display:flex;gap:4px;padding-top:6px;border-top:1px dashed rgba(120,120,120,.3)">
+       <button class="btn sm" data-wand-restore="${id}" style="padding:4px 6px;font-size:10px;flex:1" title="Return this wand to your collection (it is not auto-equipped)">⬆️ Restore</button>
+     </div>
+   </div>`;
+ }).join('');
+ return `
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--mute)">
+    <div style="color:var(--ink);font-size:11.5px;max-width:440px">
+      <b>${W.length} wand${W.length === 1 ? '' : 's'} in Storage.</b> Wands stored from your collection wait here. Restore returns a wand to your collection. Empty Bin permanently removes <u>only</u> stored wands; your recycled cards are never touched.
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      ${W.length ? (armed
+       ? `<button class="btn sm" data-act="wands-empty-confirm" style="background:#ff5c7a;color:#fff;font-weight:700;font-size:11px">Confirm: delete ${W.length} wand${W.length === 1 ? '' : 's'} forever</button><button class="btn sm g" data-act="wands-empty-cancel" style="font-size:11px">Cancel</button>`
+       : `<button class="btn sm g" data-act="wands-empty" style="font-size:11px">🗑️ Empty Bin (${W.length})</button>`) : ''}
+    </div>
+  </div>
+  ${W.length === 0 ? '<div class="center" style="padding:32px;color:var(--mute)">No wands in Storage.<br>Store a spare wand from the equipment panel on the pipeline screen.</div>' : `
+    <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(140px,1fr))">
+      ${rows}
+    </div>
+  `}
+ `;
+}
+
+function renderStorageBody(G) {
+ const tab = G.binTab === 'wands' ? 'wands' : 'cards';
+ const tb = (k, label, n) => `<button class="btn sm ${tab === k ? '' : 'g'}" data-bin-tab="${k}" style="font-size:11px">${label} (${n})</button>`;
+ return `<div style="display:flex;gap:6px;margin-bottom:10px">${tb('cards', 'Cards', (G.disc || []).length)}${tb('wands', 'Wands', (G.binWands || []).length)}</div>${tab === 'wands' ? renderWandStorage(G) : renderDiscBody(G)}`;
 }
 
 function renderDiscBody(G) {
@@ -92,14 +135,14 @@ function renderDiscBody(G) {
  return `
   <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--mute)">
     <div style="color:var(--ink);font-size:11.5px;max-width:440px">
-      <b>${N} cards in Recycle Bin.</b> Store cards here to free up hand space, restore them anytime, or delete cards to synthesize fresh cards into your draw pile!
+      <b>${N} cards in Storage.</b> Store cards here to free up hand space, restore them anytime, or delete cards to synthesize fresh cards into your draw pile!
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap">
       ${N >= 3 ? `<button class="btn sm" data-act="bin-recycle-3" style="background:#0b8479;color:#fff;font-weight:700">♻️ Delete 3 Cards → +3 Fresh Draw Cards</button>` : `<button class="btn sm" disabled style="opacity:.6;font-size:11px" title="Need at least 3 cards in bin to recycle">♻️ Delete 3 Cards (needs ${3 - N} more in bin)</button>`}
       ${N > 0 ? `<button class="btn sm g" data-act="bin-recycle-all" style="font-size:11px">🗑️ Empty Bin (${N}) → +${N} Fresh Draw Cards</button>` : ''}
     </div>
   </div>
-  ${N === 0 ? '<div class="center" style="padding:32px;color:var(--mute)">Recycle Bin is empty.<br>Tap a card in hand and click "Stash in Bin", double-tap a hand card, or remove pipeline cards to store them here!</div>' : `
+  ${N === 0 ? '<div class="center" style="padding:32px;color:var(--mute)">No cards in Storage.<br>Tap a card in hand and click "Stash in Bin", double-tap a hand card, or remove pipeline cards to store them here!</div>' : `
     <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(140px,1fr))">
       ${rows}
     </div>
@@ -149,7 +192,7 @@ export function renderOSWindows(G, handSize, extra = []) {
 
  const WINS = [
   { key: 'draw', icon: '🗂️', title: `DRAW PILE INSPECTOR (${(G.draw || []).length})`, renderBody: () => renderDrawBody(G, handSize) },
-  { key: 'disc', icon: '🗑️', title: `RECYCLE BIN (${(G.disc || []).length})`, renderBody: () => renderDiscBody(G) },
+  { key: 'disc', icon: '🗄️', title: `STORAGE (${(G.disc || []).length + (G.binWands || []).length})`, renderBody: () => renderStorageBody(G) },
   { key: 'deck', icon: '📦', title: `DECK REPOSITORY (${(G.deck || []).length})`, renderBody: () => renderDeckBody(G) },
   ...extra
  ];

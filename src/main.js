@@ -1,7 +1,8 @@
 import { W, H, GW, GH, PLAN, CHAOS, setArenaSize } from './constants.js';
 import { RAR, RC, SPELLS, MODS, UPG, HOSTS, DK, WORLDS, EN, ARENAS, BOSSES, RACE, LEAK, SEGFAULT, PLAYER_SHIELD } from './data.js';
 import { ROOM_TYPES, CYCLES, SHOP, SLOTS, redrawCost, slotHandTable, slotRTP, spinSlots, buildLayerMap, buildBossMap, ENTRY_SPOT, DIR_OPP } from './rooms.js';
-import { WANDS, wandOf, wandAccepts, bwCost, bwMaxFor, bwRegen, clampBW, CRYO } from './wands.js';
+import { WANDS, wandOf, wandAccepts, bwCost, bwMaxFor, bwRegen, clampBW, CRYO, WAND_ACQ, wandsOffered, canStoreWand } from './wands.js';
+import { wandIconHTML, drawWandSprite, wandCanvas } from './wandart.js';
 import { $, ri, pick, cl, shuffle, css, mk, defOf, isMod, maxV, okMod, wo, xText, xl, cardH } from './helpers.js';
 import { renderOSWindows } from './probability.js';
 import { drawNodes } from './themes.js';
@@ -273,7 +274,7 @@ function initializeRun(sandbox = false, startRound = 1, bossChoice = 'round') {
   last: [], modal: null, redrawUsed: 0, windows: defaultWindows(),
   sandbox, sandboxRound: sandbox ? startRound : null, sandboxBossChoice: bossChoice,
   sandboxImmortal: !!sandbox, sandboxMessage: '', bar: null,
-  wand: 'universal', wands: ['universal'], bw: 0, bwMax: 0, bwTrail: 0,
+  wand: 'universal', wands: ['universal'], binWands: [], binTab: 'cards', binWandConfirm: 0, bw: 0, bwMax: 0, bwTrail: 0,
   cycles: CYCLES.start, items: { restore: 0 }, layerRedraws: 0, rewardCtx: null, shop: null, mapMode: 0
  };
  calcST();
@@ -379,7 +380,7 @@ function slotClick(i) {
  if (dc && !G.fm) {
   const h = s && s.z === 'h' && G.hand.find(x => x.id === s.id);
   if (h) { G.hand.splice(G.hand.indexOf(h), 1); G.slots[i] = h; } else G.slots.splice(i, 1);
-  G.msg = leave(c) ? nm + ' stored in Recycle Bin.' : '';
+  G.msg = leave(c) ? nm + ' stored in Storage.' : '';
   G.sel = 0; G.lc = 0; render(); return;
  }
  if (G.fm === 'f') {
@@ -398,7 +399,7 @@ function slotClick(i) {
  if (s && s.z === 'h') {
   const h = G.hand.find(x => x.id === s.id);
   if (h) {
-   if (c.lk) { G.msg = 'Double-tap ' + nm + ' to swap it out (it moves to the Recycle Bin).'; render(); return; }
+   if (c.lk) { G.msg = 'Double-tap ' + nm + ' to swap it out (it moves to the Storage).'; render(); return; }
    G.hand.splice(G.hand.indexOf(h), 1); G.slots[i] = h; leave(c); G.sel = 0; G.msg = ''; render(); return;
   }
  }
@@ -582,7 +583,11 @@ function rollRarity() {
 }
 function rollRewards(cat) {
  const n = G.cfg.rmode === 'h' ? 2 : 3, bonus = (G.cfg.rmode === 'o' ? 1 : 0) + (G.rb || 0);
- if (cat === 'd') return shuffle(Object.keys(DK).filter(k => k !== 'slot' || (G.xs || 0) < 2)).slice(0, n).map(k => ({ t: 'd', k }));
+ if (cat === 'd') {
+  const out = shuffle(Object.keys(DK).filter(k => k !== 'slot' || (G.xs || 0) < 2)).slice(0, n).map(k => ({ t: 'd', k }));
+  const w = Math.random() < WAND_ACQ.deck ? wandOffer() : null; if (w) out.push({ t: 'w', k: w }); // Deck & Hand reward: sometimes also a wand
+  return out;
+ }
  if (cat === 'u') {
   const avail = Object.keys(UPG).filter(k => hu(k) < UPG[k].m);
   const maxR = legOK() ? 4 : epicOK() ? 3 : 2;
@@ -639,7 +644,9 @@ export function recycleCards(cardsToDelete) {
 }
 
 function takeReward(o) {
- if (o.t === 'c') {
+ if (o.t === 'w') {
+  if (acquireWand(o.k)) G.msg = `${wandName(o.k)} added to your collection. Equip it on the pipeline screen.`;
+ } else if (o.t === 'c') {
   const c = mk(o.k);
   G.deck.push(c);
   G.disc.push(c);
@@ -1203,7 +1210,7 @@ function startRoomReward(kind) {
  G.rewardCtx = { kind, room: R.room.id }; G.cfg.resumePos = { x: R.p.x, y: R.p.y };
  G.cfg.rmode = 'p'; G.cfg.elite = kind === 'challenge'; // challenge rooms pay the established Elite Hunt rarity table (uncommon or better)
  R.end = 1; keys = {}; joy = null; dashReq = false; mouseFire = 0; mobileFire = 0; mobileContinuous = 0;
- if (kind === 'chest') { G.cat = 'c'; G.offers = rollRewards('c'); } else { G.cat = null; G.offers = null; }
+ if (kind === 'chest') { G.cat = 'c'; G.offers = rollRewards('c'); const w = Math.random() < WAND_ACQ.chest ? wandOffer() : null; if (w) G.offers.push({ t: 'w', k: w }); } // Treasure chest: sometimes also a wand else { G.cat = null; G.offers = null; }
  G.view = 'reward'; render(); syncMusic();
 }
 function afterReward() {
@@ -1575,8 +1582,10 @@ function shopRender() {
 function finalizeSpin() { // idempotent: the timer and closeShop() can both call it, and the payout is only ever applied once
  const S = G.shop; if (!S || !S.spin || S.spin.paid) return;
  const sp = S.spin; sp.paid = true; clearInterval(sp.timer); sp.shown = sp.res.sym; S.busy = false;
+ if (WAND_ACQ.slots.includes(sp.res.id)) { const w = wandOffer(); if (w && acquireWand(w)) S.wandWon = w; } // House Edge: a big hand also drops a wand; the Cycle payout is unchanged
  if (sp.res.payout > 0) { G.cycles += sp.res.payout; sfx('pickup'); S.say = sp.res.id === 'five' ? 'Five of a kind. The house is... fine. +' + sp.res.payout + ' Cycles.' : sp.res.n + '! +' + sp.res.payout + ' Cycles.'; }
  else { S.say = (sp.res.id === 'pair' ? 'Just a pair. ' : 'No match. ') + 'The broom sweeps up your ' + sp.res.bet + ' CY.'; }
+ if (S.wandWon) { S.say += ` The house slides over a ${wandName(S.wandWon)}. Equip it on the pipeline screen.`; txt(R.p.x, R.p.y - 26, 'WAND ACQUIRED', wandOf(S.wandWon).col, 12); S.wandWon = null; }
  if (R.shopOpen) { shopSay(S.say); shopRender(); }
 }
 function shopClick(e) {
@@ -1820,8 +1829,24 @@ function equipWand(id) {
  if (!WANDS[id] || !(G.wands || []).includes(id) || G.wand === id) return false;
  G.wand = id; calcST(); return true;
 }
+// ---- Wand collection (G.wands) and Storage (G.binWands) are separate lists; a wand is only ever in one of them. ----
+const wandName = id => wandOf(id).n;
+function wandOffer() { const a = wandsOffered(G.wands, G.binWands); return a.length ? pick(a) : null; } // never offers a wand that is owned or in Storage
+function acquireWand(id) {
+ if (!WANDS[id] || id === 'universal' || G.wands.includes(id) || (G.binWands || []).includes(id)) return false; // no duplicates, ever
+ G.wands.push(id); return true; // acquiring never changes the equipped wand
+}
+function storeWand(id) {
+ if (!canStoreWand(id, G.wand, G.wands)) return false; // Universal and the equipped wand can never be stored: a valid equipped wand always exists
+ G.wands.splice(G.wands.indexOf(id), 1); (G.binWands ||= []).push(id); G.binWandConfirm = 0; return true;
+}
+function restoreWand(id) {
+ const i = (G.binWands || []).indexOf(id); if (i < 0 || G.wands.includes(id)) return false;
+ G.binWands.splice(i, 1); G.wands.push(id); return true; // back in the collection, NOT auto-equipped
+}
 // Pipeline cards the equipped wand cannot fire (shown to the player; they never fire silently as something else).
 const blockedCards = () => compilePipeline(G.slots, ST).out.filter(cc => stats(cc, ST).blocked);
+const wandCardH = (id, attr, extra = '') => { const w = wandOf(id); return `<button class="card u" ${attr} style="border-top-color:${w.col}"><em style="color:${w.col}">WAND</em><div style="height:40px;text-align:center;padding-top:4px">${wandIconHTML(id, 3, -35)}</div><b>${w.n}</b><small>${w.d}</small>${extra}</button>`; };
 function castLabel(c) {
  const mods = (c.mods || []).map((k, i) => `${MODS[k]?.n || k}${c.mv && c.mv[i] > 1 ? ' v' + c.mv[i] : ''}`);
  const spell = SPELLS[c.sp]?.n || c.sp || 'spell()';
@@ -6434,6 +6459,7 @@ function draw(x) {
  x.fillStyle = hc;
  x.fillText(hg, 0, 0);
  x.restore();
+ if (!R.deathSequence && G.wand) { x.globalAlpha = (p.inv > 0 && p.dash <= 0 && ((R.t * 24) | 0) % 2 ? .4 : 1); drawWandSprite(x, G.wand, p.x + Math.cos(aimAngle()) * 17, p.y + Math.sin(aimAngle()) * 17, aimAngle(), 1.3); } // the equipped wand, held toward the aim
  x.globalAlpha = 1;
 
  x.textAlign = 'center';
@@ -6545,7 +6571,7 @@ function draw(x) {
  x.beginPath(); x.arc(18, 55 + BO, 3, 0, Math.PI * 2); x.fill();
  x.font = "700 9px 'JetBrains Mono',monospace";
  x.fillText(R.combatMode ? 'COMBAT MODE // ACTIVE' : 'COMBAT MODE // OFF', 27, 55 + BO);
- { const wd = wandOf(G.wand); x.fillStyle = wd.col; x.fillText('WAND ' + wd.glyph + ' ' + wd.short, 14, 69 + BO); } // equipped wand
+ { const wd = wandOf(G.wand); x.imageSmoothingEnabled = false; x.drawImage(wandCanvas(G.wand), 14, 64 + BO, 40, 14); x.fillStyle = wd.col; x.textAlign = 'left'; x.fillText(wd.short, 60, 71 + BO); } // equipped wand: pixel sprite + name
  x.restore();
 
  x.save();
@@ -7206,7 +7232,7 @@ export function render() {
  }
  if (v === 'reward') {
   const c = G.cfg, cats = [['c', 'Spell / Modifier', 'New cards for your deck'], ['u', 'Passive', 'A permanent run upgrade'], ['d', 'Deck & Hand', 'Slots, hand size, healing']];
-  A.innerHTML = head() + `<h2>${c.boss ? BOSSES[c.boss].n + ' defeated' : G.rewardCtx ? (G.rewardCtx.kind === 'chest' ? 'Treasure cache opened' : 'Challenge cleared: Elite Hunt reward') : 'Layer cleared'}</h2>${G.rewardCtx && G.rewardNote ? `<p class="lbl">${G.rewardNote}</p>` : ''}` + (G.cat ? `<div class="grid">${G.offers.map((o, i) => cardH(o.k, `data-pick="${i}"`, o.t === 'u', 1, '', G)).join('')}</div>` : `<p class="lbl">Choose a reward type.</p><div class="grid">${cats.map(k => `<button class="card" data-cat="${k[0]}" style="border-top-color:var(--chip)"><b>${k[1]}</b><small>${k[2]}</small></button>`).join('')}</div>`);
+  A.innerHTML = head() + `<h2>${c.boss ? BOSSES[c.boss].n + ' defeated' : G.rewardCtx ? (G.rewardCtx.kind === 'chest' ? 'Treasure cache opened' : 'Challenge cleared: Elite Hunt reward') : 'Layer cleared'}</h2>${G.rewardCtx && G.rewardNote ? `<p class="lbl">${G.rewardNote}</p>` : ''}` + (G.cat ? `<div class="grid">${G.offers.map((o, i) => o.t === 'w' ? wandCardH(o.k, `data-pick="${i}"`) : cardH(o.k, `data-pick="${i}"`, o.t === 'u', 1, '', G)).join('')}</div>` : `<p class="lbl">Choose a reward type.</p><div class="grid">${cats.map(k => `<button class="card" data-cat="${k[0]}" style="border-top-color:var(--chip)"><b>${k[1]}</b><small>${k[2]}</small></button>`).join('')}</div>`);
   return;
  }
 
@@ -7237,9 +7263,9 @@ export function render() {
  A.innerHTML = head() + `${G.sandbox ? '<p class="lbl" style="color:var(--mult)">SANDBOX // NON-CANON // NO PROGRESSION</p>' : ''}${G.sandbox ? '<button class="btn g" data-act="sandbox-skip">SKIP TEST ROUND</button>' : ''}<div>
   <div class="row" style="margin-bottom:8px;gap:6px">
     <button class="btn g sm tb-btn ${isDrawOpen ? 'act' : ''}" data-act="view-draw">🗂️ Draw Pile (${G.draw.length})</button>
-    <button class="btn g sm tb-btn ${isDiscOpen ? 'act' : ''}" data-act="view-disc">🗑️ Recycle Bin (${G.disc.length})</button>
+    <button class="btn g sm tb-btn ${isDiscOpen ? 'act' : ''}" data-act="view-disc">🗄️ Storage (${G.disc.length + (G.binWands || []).length})</button>
     <button class="btn g sm tb-btn ${isDeckOpen ? 'act' : ''}" data-act="view-deck">📦 Full Deck (${G.deck.length})</button>
-    <button class="btn g sm" data-act="redraw" ${(G.cycles ?? 0) < redrawCost(G.layerRedraws || 0) ? 'disabled' : ''} title="Move hand to Recycle Bin and draw fresh cards. Costs Cycles; the price climbs each time this layer.">🔄 Redraw (${redrawCost(G.layerRedraws || 0)} CY)</button>
+    <button class="btn g sm" data-act="redraw" ${(G.cycles ?? 0) < redrawCost(G.layerRedraws || 0) ? 'disabled' : ''} title="Move hand to Storage and draw fresh cards. Costs Cycles; the price climbs each time this layer.">🔄 Redraw (${redrawCost(G.layerRedraws || 0)} CY)</button>
   </div>
 
   <div class="panel">
@@ -7247,17 +7273,16 @@ export function render() {
     <div style="margin-top:4px;font-size:11px">${(c.boss || c.bossKey) ? `<b style="color:var(--mult)">${BOSSES[c.boss || c.bossKey].n}</b>: ${BOSSES[c.boss || c.bossKey].i}` : 'Squash incoming bugs. Build persists across rounds!'}</div>
   </div>
 
-  <p class="lbl">Pipeline (modifiers affect the spell to their right). Tap a card to select it, tap another to move it to that spot, or an empty slot to move it to the end. Double-tap to remove. Cards with a bar underneath were used last round, so they go to the Recycle Bin.</p>
+  <p class="lbl">Pipeline (modifiers affect the spell to their right). Tap a card to select it, tap another to move it to that spot, or an empty slot to move it to the end. Double-tap to remove. Cards with a bar underneath were used last round, so they go to the Storage.</p>
   <div class="grid">${sl}</div>
   ${G.sandbox ? `<div class="panel" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><b style="color:var(--mult)">SANDBOX // ADD CARD</b><select id="sbx-card" class="sbx-sel">${sbxCardOpts()}</select><select id="sbx-ver" class="sbx-sel"><option value="1">v1</option><option value="2">v2</option><option value="3">v3</option></select><button class="btn g sm" data-act="sbx-add">ADD TO PIPELINE</button><button class="btn g sm" data-act="sbx-add-hand">ADD TO HAND</button></div>` : ''}
 
-  <div class="panel"><b>WAND</b> <span style="color:${wandOf(G.wand).col}">${wandOf(G.wand).glyph} ${wandOf(G.wand).n}</span>
-   <p class="lbl" style="margin:4px 0">${wandOf(G.wand).d}</p>
-   <div class="row" style="gap:6px;flex-wrap:wrap">${(G.wands || ['universal']).map(id => `<button class="btn g sm ${G.wand === id ? 'act' : ''}" data-act="wand-equip" data-wand="${id}" title="${wandOf(id).d}">${wandOf(id).glyph} ${wandOf(id).short}${G.wand === id ? ' (equipped)' : ''}</button>`).join('')}</div>
-   ${wandBlocked.length ? `<p class="lbl" style="color:#ff6a6a;margin:4px 0">// ${wandBlocked.length} pipeline spell${wandBlocked.length > 1 ? 's' : ''} cannot be fired by this wand (${[...new Set(wandBlocked.map(cc => SPELLS[cc.sp].n))].join(', ')}). They will not fire. Switch wands or change the pipeline.</p>` : ''}</div>
+  <div class="panel"><b>WAND</b> <span class="lbl">equipment // ${(G.wands || []).length} owned</span>
+   <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:6px;align-items:stretch">${(G.wands || ['universal']).map(id => { const w = wandOf(id), eq = G.wand === id, st = canStoreWand(id, G.wand, G.wands || []); return `<div class="card" style="cursor:default;min-width:150px;max-width:210px;border-top-color:${w.col};${eq ? 'outline:2px solid ' + w.col + ';' : ''}"><div style="height:44px;text-align:center;padding-top:6px">${wandIconHTML(id, 3, -35)}</div><em style="color:${w.col}">${eq ? 'EQUIPPED' : 'WAND'}</em><b>${w.n}</b><small>${w.d}</small><div style="margin-top:auto;display:flex;gap:4px;padding-top:6px"><button class="btn sm ${eq ? '' : 'g'}" data-act="wand-equip" data-wand="${id}" style="flex:1;font-size:10px;padding:4px 6px" ${eq ? 'disabled' : ''}>${eq ? 'Equipped' : 'Equip'}</button>${id === 'universal' ? '' : `<button class="btn sm g" data-act="wand-store" data-wand="${id}" style="flex:1;font-size:10px;padding:4px 6px" ${st ? '' : 'disabled'} title="${eq ? 'Equip another wand first' : 'Move to Storage (Wands tab)'}">Store</button>`}</div></div>`; }).join('')}</div>
+   ${wandBlocked.length ? `<p class="lbl" style="color:#ff6a6a;margin:6px 0 0">// ${wandBlocked.length} pipeline spell${wandBlocked.length > 1 ? 's' : ''} cannot be fired by this wand (${[...new Set(wandBlocked.map(cc => SPELLS[cc.sp].n))].join(', ')}). They will not fire. Switch wands or change the pipeline.</p>` : ''}</div>
   <div class="panel"><pre>${ok ? cp.out.map(cc => lineOf(cc, ST)).join('\n') : '// slot at least one damage spell the equipped wand can fire'}${cp.dead.length ? '\n// warning: trailing modifier does nothing' : ''}</pre></div>
 
-  <p class="lbl">Hand (tap to slot; double-tap to stash in Recycle Bin; if pipeline is full, tap a hand card, then a pipeline card)</p>
+  <p class="lbl">Hand (tap to slot; double-tap to stash in Storage; if pipeline is full, tap a hand card, then a pipeline card)</p>
   <div class="grid">${G.hand.map((cc, i) => cardH(cc.k, `data-hand="${i}"`, 0, cc.v, (G.fz === cc.id ? 'fz ' : '') + (G.fs === cc.id || (G.sel && G.sel.id === cc.id) ? 'selc' : G.fs && G.hand.find(x => x.id === G.fs)?.k === cc.k ? 'glow' : ''), G)).join('')}</div>
 
   <div class="row">
@@ -7265,9 +7290,9 @@ export function render() {
     <button class="btn g" data-act="clear" ${G.slots.length ? '' : 'disabled'}>Clear pipeline</button>
     <button class="btn g" data-act="fuse">${G.fm === 'f' ? 'Fusing...' : 'Fuse'}</button>
     <button class="btn g" data-act="unfuse">${G.fm === 'u' ? 'Unfusing...' : 'Unfuse'}</button>
-    ${G.sel && G.sel.z === 'h' ? `<button class="btn g" data-act="stash" style="border-color:#0b8479;color:#0b8479;font-weight:700" title="Store selected card in Recycle Bin">📥 Stash in Recycle Bin</button>` : ''}
+    ${G.sel && G.sel.z === 'h' ? `<button class="btn g" data-act="stash" style="border-color:#0b8479;color:#0b8479;font-weight:700" title="Store selected card in Storage">📥 Stash in Storage</button>` : ''}
   </div>
-  <p class="lbl">${G.msg || 'Persistent Pipeline: cards stay equipped between rounds. Store cards in Recycle Bin, or delete 3 cards to put 3 fresh cards in draw pile.'}</p></div>
+  <p class="lbl">${G.msg || 'Persistent Pipeline: cards stay equipped between rounds. Store cards in Storage, or delete 3 cards to put 3 fresh cards in draw pile.'}</p></div>
   ${windowsHTML}
  `;
 }
@@ -7297,6 +7322,14 @@ $('#app').addEventListener('click', e => {
   }
  }
 
+ const binTabBtn = e.target.closest('[data-bin-tab]');
+ if (binTabBtn) { G.binTab = binTabBtn.dataset.binTab === 'wands' ? 'wands' : 'cards'; G.binWandConfirm = 0; uiSound('select'); render(); return; }
+ const wandRestoreBtn = e.target.closest('[data-wand-restore]');
+ if (wandRestoreBtn) { // Wands tab: restores ONLY a wand (G.binWands -> G.wands). Cards are not touched.
+  const id = wandRestoreBtn.dataset.wandRestore;
+  if (restoreWand(id)) { uiSound('card_place'); G.msg = `${wandName(id)} restored to your collection.`; }
+  render(); return;
+ }
  const binRestoreBtn = e.target.closest('[data-bin-restore]');
  if (binRestoreBtn) {
   const id = +binRestoreBtn.dataset.binRestore;
@@ -7305,7 +7338,7 @@ $('#app').addEventListener('click', e => {
    G.disc.splice(G.disc.indexOf(card), 1);
    G.hand.push(card);
    uiSound('card_place');
-   G.msg = `${defOf(card.k).n} restored from Recycle Bin to hand.`;
+   G.msg = `${defOf(card.k).n} restored from Storage to hand.`;
    render();
   }
   return;
@@ -7394,9 +7427,15 @@ $('#app').addEventListener('click', e => {
   render();
   return;
  }
+ if (d.act === 'wands-empty') { if ((G.binWands || []).length) { G.binWandConfirm = 1; uiSound('select'); } render(); return; } // first click only arms the confirmation
+ if (d.act === 'wands-empty-cancel') { G.binWandConfirm = 0; render(); return; }
+ if (d.act === 'wands-empty-confirm') { // permanently removes ONLY the stored wands; G.disc / G.deck are never touched
+  const n = (G.binWands || []).length; G.binWands = []; G.binWandConfirm = 0;
+  G.msg = n ? `${n} stored wand${n > 1 ? 's' : ''} permanently deleted.` : ''; uiSound('back'); render(); return;
+ }
  if (d.act === 'bin-recycle-3') {
   if (G.disc.length < 3) {
-   G.msg = `Need at least 3 cards in Recycle Bin to recycle (currently ${G.disc.length}).`;
+   G.msg = `Need at least 3 cards in Storage to recycle (currently ${G.disc.length}).`;
    uiSound('deny');
    render();
    return;
@@ -7417,7 +7456,7 @@ $('#app').addEventListener('click', e => {
     G.disc.push(card);
     G.sel = 0;
     uiSound('card_drop');
-    G.msg = `${defOf(card.k).n} stored in Recycle Bin.`;
+    G.msg = `${defOf(card.k).n} stored in Storage.`;
     render();
     return;
    }
@@ -7493,6 +7532,11 @@ $('#app').addEventListener('click', e => {
   const k = $('#sbx-card')?.value, v = +($('#sbx-ver')?.value || 1);
   if (k && (SPELLS[k] || MODS[k])) { G.sbxCard = k; const c = mk(k, v); G.deck.push(c); if (d.act === 'sbx-add' && G.slots.length < nSlots()) G.slots.push(c); else G.hand.push(c); sfx('heal'); }
   render(); return;
+ } else if (d.act === 'wand-store') {
+  const id = d.wand;
+  if (storeWand(id)) { G.msg = `${wandName(id)} moved to Storage (Wands tab).`; uiSound('card_drop'); }
+  else { G.msg = id === G.wand ? 'Equip a different wand before storing this one.' : 'The Universal Wand cannot be stored.'; uiSound('deny'); }
+  render();
  } else if (d.act === 'wand-equip') {
   if (equipWand(d.wand)) { const nb = blockedCards().length; G.msg = `${wandOf(G.wand).n} equipped.` + (nb ? ` Warning: ${nb} pipeline spell${nb > 1 ? 's' : ''} cannot be fired by it.` : ''); sfx('heal'); }
   render();
@@ -7501,7 +7545,7 @@ $('#app').addEventListener('click', e => {
   G.slots.forEach(leave);
   G.slots = [];
   G.sel = 0;
-  G.msg = n ? n + ' used card' + (n > 1 ? 's' : '') + ' went to the Recycle Bin.' : '';
+  G.msg = n ? n + ' used card' + (n > 1 ? 's' : '') + ' went to the Storage.' : '';
   render();
  } else if (d.hand != null) {
   if (G.fm) {
@@ -7678,3 +7722,6 @@ addEventListener('keyup', e => {
 
 render();
 initFullscreen();
+
+// Test-only hook: compiled out of production builds (import.meta.env.VITE_TEST is undefined unless a test build sets it).
+if (import.meta.env?.VITE_TEST) window.__SC = { get G() { return G; }, get R() { return R; }, leaveRoom, openChest, openShop, startRoomReward, roomMap, render, fight, wandOffer, roomClear, advance, ST: () => ST };
