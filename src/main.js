@@ -1,6 +1,7 @@
 import { W, H, GW, GH, PLAN, CHAOS, setArenaSize } from './constants.js';
 import { RAR, RC, SPELLS, MODS, UPG, HOSTS, DK, WORLDS, EN, ARENAS, BOSSES, RACE, LEAK, SEGFAULT, PLAYER_SHIELD } from './data.js';
 import { ROOM_TYPES, CYCLES, SHOP, SLOTS, redrawCost, slotHandTable, slotRTP, spinSlots, buildLayerMap, buildBossMap, ENTRY_SPOT, DIR_OPP } from './rooms.js';
+import { WANDS, wandOf, wandAccepts, bwCost, bwMaxFor, bwRegen, clampBW, CRYO } from './wands.js';
 import { $, ri, pick, cl, shuffle, css, mk, defOf, isMod, maxV, okMod, wo, xText, xl, cardH } from './helpers.js';
 import { renderOSWindows } from './probability.js';
 import { drawNodes } from './themes.js';
@@ -193,6 +194,8 @@ function calcST() {
  s.slots += G.xs || 0;
  s.hand += G.xh || 0;
  for (const k in G.u) for (let i = 0; i < G.u[k]; i++) UPG[k]?.f?.(s);
+ s.wand = WANDS[G.wand] ? G.wand : 'universal'; // equipped wand id, read by stats() in combat.js
+ s.bwr = 1; s.bwcost = 1; s.bwmax = 1; // Bandwidth modifiers (passives may change these later; BWR itself stays hidden)
  ST = s;
  const old = G.max || 0;
  G.max = Math.round((h.hp + s.hpa) * s.hpm);
@@ -270,6 +273,7 @@ function initializeRun(sandbox = false, startRound = 1, bossChoice = 'round') {
   last: [], modal: null, redrawUsed: 0, windows: defaultWindows(),
   sandbox, sandboxRound: sandbox ? startRound : null, sandboxBossChoice: bossChoice,
   sandboxImmortal: !!sandbox, sandboxMessage: '', bar: null,
+  wand: 'universal', wands: ['universal'], bw: 0, bwMax: 0, bwTrail: 0,
   cycles: CYCLES.start, items: { restore: 0 }, layerRedraws: 0, rewardCtx: null, shop: null, mapMode: 0
  };
  calcST();
@@ -282,6 +286,8 @@ function initializeRun(sandbox = false, startRound = 1, bossChoice = 'round') {
  });
  G.draw = shuffle([...G.deck]);
  if (!sandbox && !hostOpen(G.host)) G.host = 'debugger'; // sandbox may use any Host, locked or not
+ if (sandbox) G.wands = Object.keys(WANDS); // sandbox is a test bed: every wand is available (no wand economy exists yet)
+ initBW(true);
  G.round = sandbox ? cl(Math.floor(+startRound || 1), 1, PLAN.length) : 1;
  G.sector = sandbox ? Math.ceil(G.round / 5) : 1;
  G.layer = sandbox ? (G.round - 1) % 5 + 1 : 1;
@@ -1146,6 +1152,7 @@ function roomInit(c) { // right after R exists
  const M = c.map, rm = M.rooms[M.cur], T = ROOM_TYPES[rm.type], st = M.state[rm.id];
  const room = R.room = { id: rm.id, type: rm.type, T, cleared: !!(T.safe || st.cleared), t: 0, acts: [], near: null, rewardWait: 0 };
  if (rm.type === 'T') room.acts.push({ k: 'chest', ...findFree(c.arena, 320, 200), r: 48, label: st.looted ? 'EMPTY CACHE' : '[E] OPEN CACHE' });
+  if (rm.type === 'E' && st.rewarded && !st.claimed) room.acts.push({ k: 'chest', reward: 'challenge', ...findFree(c.arena, 320, 200), r: 48, label: '[E] OPEN REWARD CHEST' }); // left before claiming: the chest is still here
  if (rm.type === '$') {
   M.shop = M.shop || {}; room.shop = M.shop[rm.id] = M.shop[rm.id] || buildShopStock();
   room.merchant = { x: 320, y: 138 };
@@ -1178,8 +1185,10 @@ function roomClear(m) { // a hostile room has been beaten (swarm cleared, or the
  if (earn) { G.cycles += earn; txt(R.p.x, R.p.y - 26, '+' + earn + ' CYCLES', '#e2b24a', 12); }
  if (room.type === 'X') { M.layerMode = m; G.cfg.rmode = m; room.portal = findFree(G.cfg.arena, 320, 200); }
  if (room.type === 'E' && !st.rewarded) {
-  st.rewarded = true; room.rewardWait = 1; const mine = R;
-  setTimeout(() => { if (R === mine && G.view === 'run') startRoomReward('challenge'); }, 1100);
+  st.rewarded = true; // the reward is NOT opened automatically any more: a chest unlocks and the player opens it
+  const spot = findFree(G.cfg.arena, 320, 200);
+  room.acts.push({ k: 'chest', reward: 'challenge', ...spot, r: 48, label: '[E] OPEN REWARD CHEST' });
+  R.banner = { t: 2.2, s: 'REWARD CHEST UNLOCKED' }; ring(spot.x, spot.y, 30, '#ff7ad9', .5); sfx('pickup');
  }
 }
 function layerExit() { // stepping on the exit node's portal ends the layer through the ORIGINAL reward flow
@@ -1201,8 +1210,15 @@ function afterReward() {
  if (G.rewardCtx) { G.rewardCtx = null; G.cfg.elite = false; G.cat = null; G.offers = null; fight(); return; } // back to the room you were in
  advance();
 }
+const chestSpent = (a, st) => a.reward === 'challenge' ? !!st.claimed : !!st.looted;
 function openChest(act) {
  const st = roomMap().state[R.room.id];
+ if (act.reward === 'challenge') { // challenge reward chest: flagged BEFORE the existing reward screen opens, so it can never pay out twice
+  if (st.claimed) { R.hint = { t: 1.4, s: 'This reward was already claimed.' }; uiSound('deny'); return; }
+  st.claimed = true; act.label = 'EMPTY'; sfx('pickup');
+  startRoomReward('challenge');
+  return;
+ }
  if (st.looted) { R.hint = { t: 1.4, s: 'This cache is already empty.' }; uiSound('deny'); return; }
  st.looted = true; act.label = 'EMPTY CACHE'; // flagged BEFORE the reward screen opens, so it can never pay out twice
  const [lo, hi] = CYCLES.chestCycles, n = lo + ri(hi - lo + 1);
@@ -1226,7 +1242,7 @@ function roomTick(dt) { // runs every frame while the room is clear / safe
  if (room.portal && Math.hypot(p.x - room.portal.x, p.y - room.portal.y) < 26) { layerExit(); return; }
  if (room.t > .45) for (const d in rm.doors) if (nearDoor(d, p)) { leaveRoom(d); return; }
  room.near = null;
- for (const a of room.acts) if (Math.hypot(p.x - a.x, p.y - a.y) < a.r && !(a.k === 'chest' && M.state[room.id].looted)) { room.near = a; break; }
+ for (const a of room.acts) if (Math.hypot(p.x - a.x, p.y - a.y) < a.r && !(a.k === 'chest' && chestSpent(a, M.state[room.id]))) { room.near = a; break; }
  const ib = $('#interact'); if (ib) { const show = room.near ? '1' : ''; if (ib.dataset.on !== show) { ib.dataset.on = show; ib.style.display = show ? 'block' : 'none'; } if (room.near) ib.textContent = room.near.k === 'chest' ? 'OPEN' : room.near.k === 'slots' ? 'SLOTS' : 'TALK'; }
 }
 function interact() {
@@ -1327,12 +1343,19 @@ function drawWallsAndDoors(x, room, M, rm, t) {
  const TAG = { N: [W / 2, WT + 38], S: [W / 2, H - WT - 38], W: [WT + 44, H / 2], E: [W - WT - 44, H / 2] };
  for (const side in rm.doors) {
   const to = M.rooms[rm.doors[side]], tt = ROOM_TYPES[to.type], boss = to.type === 'B', open = room.cleared, pulse = .6 + .35 * Math.sin(t * 4);
-  const col = boss ? '#ff4d6d' : open ? tt.col : '#d23a3a', [fx, fy, fr] = FR[side], pw = boss ? 11 : 8, pd = WT + (boss ? 6 : 4);
+  const chal = to.type === 'E'; // Challenge Room entrance: amber hazard-trimmed gate. Distinct from ordinary doors, lighter than the red boss door.
+  const col = boss ? '#ff4d6d' : chal ? '#ffb04f' : open ? tt.col : '#d23a3a', [fx, fy, fr] = FR[side], pw = boss ? 11 : chal ? 10 : 8, pd = WT + (boss ? 6 : chal ? 5 : 4);
   x.save(); x.translate(fx, fy); x.rotate(fr);
   x.fillStyle = '#0a0d12'; x.fillRect(-GAP - pw + 1, 0, pw, pd); x.fillRect(GAP - 1, 0, pw, pd); // posts
   x.strokeStyle = th.edge; x.lineWidth = 1.5; x.strokeRect(-GAP - pw + 1, 0, pw, pd); x.strokeRect(GAP - 1, 0, pw, pd);
   if (boss) { x.fillStyle = 'rgba(255,77,109,.6)'; for (let i = 0; i < 4; i++) { x.fillRect(-GAP - pw + 2, 2 + i * 4, pw - 2, 2); x.fillRect(GAP, 2 + i * 4, pw - 2, 2); } }
   x.fillStyle = col; x.shadowColor = col; x.shadowBlur = 8; x.fillRect(-GAP - 4, pd - 2, 4, 3); x.fillRect(GAP, pd - 2, 4, 3); x.shadowBlur = 0; // post lights
+  if (chal) { // amber caution stripes on the posts, a lintel plate and a small warning plaque
+   x.fillStyle = 'rgba(255,176,79,.75)'; for (let i = 0; i < 3; i++) { x.fillRect(-GAP - pw + 2, 2 + i * 4, pw - 2, 2); x.fillRect(GAP, 2 + i * 4, pw - 2, 2); }
+   x.strokeStyle = '#ffb04f'; x.lineWidth = 1.5; x.globalAlpha = .6 + .25 * Math.sin(t * 2.4); x.strokeRect(-GAP - pw + 1, 0, 2 * (GAP + pw) - 2, pd + 3); x.globalAlpha = 1;
+   x.fillStyle = '#ffb04f'; x.beginPath(); x.moveTo(0, WT + 4); x.lineTo(7, WT + 16); x.lineTo(-7, WT + 16); x.closePath(); x.fill();
+   x.fillStyle = '#1a1208'; x.font = "700 9px 'JetBrains Mono',monospace"; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText('!', 0, WT + 12.5);
+  }
   if (boss) { // boss door: glowing outer frame + a hazard-striped warning mat in front of it
    x.save(); x.globalAlpha = .55 + .35 * Math.sin(t * 3); x.strokeStyle = '#ff4d6d'; x.lineWidth = 2.5; x.shadowColor = '#ff4d6d'; x.shadowBlur = 14; x.strokeRect(-GAP - pw + 1, 0, 2 * (GAP + pw) - 2, pd + 26); x.restore();
    x.save(); x.beginPath(); x.rect(-GAP + 2, WT, 2 * GAP - 4, 24); x.clip(); x.fillStyle = 'rgba(8,4,6,.7)'; x.fillRect(-GAP, WT, 2 * GAP, 24);
@@ -1349,21 +1372,39 @@ function drawWallsAndDoors(x, room, M, rm, t) {
    x.globalAlpha = 1;
   }
   x.restore();
-  const tag = boss ? 'BOSS' : to.type === 'C' || to.type === 'X' ? '' : to.type;
+  const tag = boss ? 'BOSS' : chal ? 'CHALLENGE' : to.type === 'C' || to.type === 'X' ? '' : to.type;
   if (tag) { x.fillStyle = col; x.font = "700 " + (boss ? 14 : 11) + "px 'JetBrains Mono',monospace"; x.textAlign = 'center'; x.textBaseline = 'middle'; x.shadowColor = col; x.shadowBlur = boss ? 10 : 0; x.fillText(tag, TAG[side][0], TAG[side][1]); x.shadowBlur = 0; }
+ }
+ x.restore();
+}
+// Programming-themed data cache: dark armored crate, circuit traces, a glowing `{ }` terminal lid and a `>_` latch.
+// kind 'T' = treasure cache (gold/cyan), 'E' = challenge reward (hot magenta/amber). spent = opened/emptied.
+function drawChest(x, a, spent, kind, t) {
+ const col = kind === 'E' ? '#ff7ad9' : '#5ee0d0', acc = kind === 'E' ? '#ffb04f' : '#e2b24a';
+ x.save(); x.translate(a.x, a.y);
+ x.shadowColor = col; x.shadowBlur = spent ? 0 : 12 + 4 * Math.sin(t * 3);
+ x.fillStyle = spent ? '#1d222b' : '#0f1724'; x.fillRect(-19, -2, 38, 21); // body
+ x.shadowBlur = 0; x.strokeStyle = spent ? '#4a5160' : col; x.lineWidth = 1.5; x.strokeRect(-19, -2, 38, 21);
+ x.strokeStyle = spent ? '#323946' : 'rgba(94,224,208,.45)'; x.lineWidth = 1; // circuit traces
+ x.beginPath(); x.moveTo(-15, 15); x.lineTo(-8, 15); x.lineTo(-8, 8); x.lineTo(-2, 8); x.moveTo(15, 15); x.lineTo(9, 15); x.lineTo(9, 6); x.stroke();
+ x.fillStyle = spent ? '#4a5160' : acc; for (const [px, py] of [[-8, 8], [9, 6], [-2, 8]]) x.fillRect(px - 1.5, py - 1.5, 3, 3);
+ x.fillStyle = spent ? '#2a303b' : '#1b2a40'; x.fillRect(-19, -2, 38, 4); // lid seam
+ if (spent) { // lid slid open: dark empty bay, `null`
+  x.fillStyle = '#10141b'; x.fillRect(-19, -13, 38, 10); x.strokeStyle = '#4a5160'; x.strokeRect(-19, -13, 38, 10);
+  x.fillStyle = '#6b7385'; x.font = "700 7px 'JetBrains Mono',monospace"; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText('null', 0, -8);
+ } else {
+  x.fillStyle = '#0b1220'; x.fillRect(-19, -13, 38, 11); x.strokeStyle = col; x.strokeRect(-19, -13, 38, 11);
+  x.fillStyle = col; x.font = "700 9px 'JetBrains Mono',monospace"; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(kind === 'E' ? '{sudo}' : '{ }', 0, -7);
+  x.fillStyle = '#05080d'; x.fillRect(-7, 5, 14, 9); x.strokeStyle = acc; x.strokeRect(-7, 5, 14, 9);
+  x.fillStyle = acc; x.font = "700 7px 'JetBrains Mono',monospace"; x.fillText(Math.floor(t * 2) % 2 ? '>_' : '> ', 0, 9.5);
+  x.fillStyle = col; for (const sx of [-19, 19]) { x.fillRect(sx - 2, -13, 4, 3); x.fillRect(sx - 2, 16, 4, 3); } // corner brackets
  }
  x.restore();
 }
 function drawRoomLayer(x) {
  const room = R.room, M = roomMap(), rm = M.rooms[room.id], t = R.t, T = room.T;
  drawWallsAndDoors(x, room, M, rm, t);
- if (room.type === 'T') { // treasure cache
-  const a = room.acts[0], looted = M.state[room.id].looted;
-  x.save(); x.translate(a.x, a.y); x.shadowColor = '#e2b24a'; x.shadowBlur = looted ? 0 : 14;
-  x.fillStyle = looted ? '#3a3a3a' : '#7d5a1c'; x.fillRect(-18, -4, 36, 22); x.fillStyle = looted ? '#4a4a4a' : '#e2b24a'; x.fillRect(-18, -4, 36, 5);
-  if (looted) { x.fillStyle = '#222'; x.fillRect(-18, -14, 36, 8); } else { x.fillRect(-18, -12, 36, 9); x.fillStyle = '#0b1117'; x.fillRect(-3, 2, 6, 8); }
-  x.restore();
- }
+ for (const a of room.acts) if (a.k === 'chest') drawChest(x, a, chestSpent(a, M.state[room.id]), a.reward ? 'E' : 'T', t); // treasure cache + challenge reward chest
  if (room.type === '$') { // cycle shop: marquee bulbs, counter, slot machine, odds board and the merchant
   x.save();
   for (let i = 0; i < 15; i++) { const on = (Math.floor(t * 6) + i) % 3 === 0; x.fillStyle = on ? '#ffd24a' : '#5a4a1a'; x.beginPath(); x.arc(70 + i * 36, 10, 3, 0, 7); x.fill(); }
@@ -1393,7 +1434,7 @@ function mapLayout(M, mode) {
  const cw = big ? Math.min(60, Math.floor((W - 160) / gw) - 22) : 15, ch = big ? Math.round(cw * .66) : 11, gap = big ? 22 : 4;
  const mw = gw * (cw + gap) - gap, mh = gh * (ch + gap) - gap;
  if (big) { const pw = Math.max(mw + 80, 340), ph = mh + 130, px = (W - pw) / 2, py = (H - ph) / 2; return { x0, y0, cw, ch, gap, big, ox: px + (pw - mw) / 2, oy: py + 58, px, py, pw, ph }; }
- return { x0, y0, cw, ch, gap, big, ox: 16, oy: 100, px: 10, py: 94, pw: mw + 12, ph: mh + 12 };
+ return { x0, y0, cw, ch, gap, big, ox: 16, oy: 124, px: 10, py: 118, pw: mw + 12, ph: mh + 12 }; // moved down: the HUD card grew a Bandwidth row and a wand row
 }
 function syncMap() {
  const b = $('#mapbtn'), a = $('#maparea'); if (!b || !a || !R?.room) return;
@@ -1761,6 +1802,26 @@ function updP(dt) {
  }
 }
 
+// ---- Bandwidth (BW): lives on G so it persists across rooms (R is rebuilt per room). BWR (regen) is internal and never shown. ----
+function initBW(full) {
+ G.bwMax = bwMaxFor(G.host, ST);
+ G.bw = full ? G.bwMax : clampBW(G.bw, G.bwMax);
+ G.bwTrail = G.bw;
+}
+function updBW(dt) {
+ if (!(G.bwMax > 0)) initBW(true);
+ const before = G.bw;
+ G.bw = clampBW(G.bw + bwRegen(ST) * dt, G.bwMax); // regeneration can never exceed the maximum
+ G.bwTrail = G.bwTrail > G.bw ? Math.max(G.bw, G.bwTrail - G.bwMax * 1.2 * dt) : G.bw; // lagging bar shows what was just spent
+ G.bwRegenOn = G.bw > before + 1e-6 && G.bw < G.bwMax ? 1 : 0;
+ if (R && R.bwFlash > 0) R.bwFlash -= dt;
+}
+function equipWand(id) {
+ if (!WANDS[id] || !(G.wands || []).includes(id) || G.wand === id) return false;
+ G.wand = id; calcST(); return true;
+}
+// Pipeline cards the equipped wand cannot fire (shown to the player; they never fire silently as something else).
+const blockedCards = () => compilePipeline(G.slots, ST).out.filter(cc => stats(cc, ST).blocked);
 function castLabel(c) {
  const mods = (c.mods || []).map((k, i) => `${MODS[k]?.n || k}${c.mv && c.mv[i] > 1 ? ' v' + c.mv[i] : ''}`);
  const spell = SPELLS[c.sp]?.n || c.sp || 'spell()';
@@ -1858,6 +1919,8 @@ function fire(c) {
    }
    t = b;
   }
+ } else if (a.k === 'cone' && a.wandFx === 'cryo') {
+  cryoStream(a, c);
  } else if (a.k === 'cone') {
   const tier = a.lv >= 3 ? 2 : a.lv === 2 ? 1 : 0, pal = STDOUT_PAL[tier];
   const mapStep = a.pc > 1 ? (a.pc - 1) / 2 : 0;
@@ -1924,11 +1987,11 @@ function fire(c) {
  } else if (a.k === 'orbit') {
   const nb = 2 * a.rep + (a.pc > 1 ? 2 : 0) + Math.max(0, (a.lv || 1) - 1);
   // NERF: one activation = one set of blades. Repeat casts (for/async/fork) can no longer rebuild a damaged ring mid-activation.
-  if (p.orb && p.orb.t > 0) return;
+  if (p.orb && p.orb.t > 0) return false;
   sfx('cast_orbit', { x: p.x });
   p.orb = { t: Math.max(4.6, 1 / a.rate + .4), n: nb, a: { ...a, knock: Math.max(a.knock || 0, 150) }, ang: 0, zt: .5, bl: Array.from({ length: nb }, () => ({ c: 3, dead: 0 })) };
  } else if (a.k === 'mine') {
-  if (R.tg.filter(t => t.mine && t.own === 'p').length >= 6) return;
+  if (R.tg.filter(t => t.mine && t.own === 'p').length >= 6) return false; // rejected: no BW charged
   R.tg.push({ mine: 1, x: p.x, y: p.y, r: a.rad * a.area, t: .9, max: .9, dmg: a.dmg, own: 'p', c: a.col, a });
  } else if (a.k === 'self') {
   if (a.shv) { p.shx = Math.min((p.shx || 0) + a.shv * ST.shm * a.area, PLAYER_SHIELD.maxBonus); ring(p.x, p.y, 24, '#5ee0d0', .3); txt(p.x, p.y - 16, '+MAX SHIELD', '#5ee0d0', 10); }
@@ -1936,11 +1999,47 @@ function fire(c) {
  }
 }
 
+// ---- Cryomancer Wand: stdout() becomes a Cryogenic Stream (real damage + freeze + slowing floor ice). Reuses hitE / freeze / wallHit. ----
+function cryoStream(a, c) {
+ const p = R.p, a0 = aimAngle(), mapStep = a.pc > 1 ? (a.pc - 1) / 2 : 0, F = CRYO.frost;
+ const maxL = a.cryoLen * a.area * (1 + .2 * mapStep), half = a.cryoHalf + .03 * mapStep;
+ let L = 0; const ca = Math.cos(a0), sa = Math.sin(a0);
+ while (L < maxL && !wallHit(G.cfg.arena, p.x + ca * (L + 6), p.y + sa * (L + 6), 2)) L += 6; // the stream stops at walls
+ R.fx.push({ x: p.x, y: p.y, r: 0, max: L, l: .22, d: .22, c: a.col, cryo: 1, a: a0, h: half, seed: Math.random() * 9 });
+ for (const e of R.en) {
+  if (e.dead) continue;
+  const dx = e.x - p.x, dy = e.y - p.y, dist = Math.hypot(dx, dy);
+  if (dist > L + e.r) continue;
+  let df = Math.atan2(dy, dx) - a0; df = Math.atan2(Math.sin(df), Math.cos(df));
+  if (Math.abs(df) < half + Math.atan2(e.r, Math.max(dist, 1))) hitE(e, a.dmg, a, p);
+ }
+ // floor ice along the stream (capped so a held stream stays cheap)
+ R.frost ||= [];
+ for (let d = 26; d <= L; d += F.spacing) {
+  const fx = p.x + ca * d, fy = p.y + sa * d;
+  const ex = R.frost.find(q => Math.hypot(q.x - fx, q.y - fy) < F.r * .7);
+  if (ex) { ex.l = Math.max(ex.l, F.life * .85); continue; }
+  if (R.frost.length < F.max) R.frost.push({ x: fx, y: fy, r: F.r * (.8 + Math.random() * .5), l: F.life, m: F.life, seed: Math.random() * 9 });
+ }
+ for (let i = [2, 4, 7][SET.q]; i-- > 0;) { const d = Math.random() * L, w = (Math.random() - .5) * half * 1.6; part(p.x + Math.cos(a0 + w) * d, p.y + Math.sin(a0 + w) * d, Math.cos(a0) * 40, Math.sin(a0) * 40 - 20, .4, Math.random() < .5 ? '#7ee8ff' : '#e6fbff', 2 + Math.random() * 2, 1); }
+}
+function updFrost(dt) {
+ if (!R.frost || !R.frost.length) return;
+ const F = CRYO.frost;
+ for (const q of R.frost) q.l -= dt;
+ R.frost = R.frost.filter(q => q.l > 0);
+ for (const e of R.en) {
+  if (e.dead) continue;
+  for (const q of R.frost) if (Math.hypot(e.x - q.x, e.y - q.y) < q.r + e.r * .5) { e.slow = Math.max(e.slow || 0, .3); e.sf = Math.min(e.sf || 1, F.slow); break; }
+ }
+}
 function updCasts(dt) {
  const p = R.p, tm = Math.max(.3, p.mov ? 1 + ST.mv : 1 - ST.still);
  R.attackHeld = !!(R.combatMode && (keys.x || mouseFire || mobileFire || mobileContinuous));
  for (const c of R.casts) {
   if (!R.attackHeld) { c.pend = 0; continue; }
+  if (c.blk === undefined) c.blk = !!stats(c.c, ST).blocked; // wand cannot fire this card: it never fires (and never as a different attack)
+  if (c.blk) { c.pend = 0; continue; }
   if (c.dis > 0) { c.dis -= dt; continue; }
   if (c.pend > 0) {
    c.bt -= dt;
@@ -1949,10 +2048,13 @@ function updCasts(dt) {
   c.t -= dt * tm;
   if (c.t <= 0) {
    const a = stats(c.c, ST);
-   if (canCast(a)) {
+   const cost = bwCost(a, ST);
+   if (canCast(a) && cost > G.bw + 1e-9) { R.bwFlash = .5; c.t = 0; } // insufficient BW: nothing fires, nothing is charged
+   else if (canCast(a)) {
+    if (fire(c) === false) { c.t = 0; continue; } // rejected inside fire(): no cooldown, no charge
+    if (cost > 0) { G.bw = clampBW(G.bw - cost, G.bwMax); R.bwUsed = (R.bwUsed || 0) + cost; } // BW is only paid when the cast actually executed
     c.n++;
     R.castsExecuted++;
-    fire(c);
     c.pend = a.rep - 1 + (ST.over && c.n % 3 === 0 ? 1 : 0) + (ST.recur && c.n % 5 === 0 ? 1 : 0) + (ST.fork && Math.random() < .15 ? a.rep : 0);
     c.bt = .12; c.rate = a.rate; c.t = c.period = 1 / a.rate;
    } else c.t = 0;
@@ -4418,6 +4520,7 @@ function step(dt) {
  if (R.shopOpen || (R.room && G.mapMode === 2)) { updMisc(dt); return; }
  if (R.sandbox && R.sbDash) R.p.dcd = 0;
  updP(dt);
+ updBW(dt); updFrost(dt);
  if (R.room && R.room.cleared) { updPr(dt); updMisc(dt); roomTick(dt); return; } // clear or safe room: just walk, use doors, interact
  updSpawn(dt); updCasts(dt); updPr(dt); updEn(dt); updMisc(dt);
  if (R.room && !R.end && R.en.length === 0 && R.budget <= .3) { roomClear('p'); return; }
@@ -5832,6 +5935,18 @@ function draw(x) {
    x.moveTo(k.x, k.y - 7); x.lineTo(k.x + 6, k.y); x.lineTo(k.x, k.y + 7); x.lineTo(k.x - 6, k.y); x.fill();
   }
  }
+ if (R.frost && R.frost.length) { // floor ice from the Cryogenic Stream: pale hex plates + frost cracks, fading out
+  x.save();
+  for (const q of R.frost) {
+   const k = Math.min(1, q.l / (q.m * .5)), r = q.r;
+   x.globalAlpha = .38 * k; x.fillStyle = '#9fefff'; x.beginPath();
+   for (let i = 0; i < 6; i++) { const an = i * Math.PI / 3 + q.seed; x.lineTo(q.x + Math.cos(an) * r, q.y + Math.sin(an) * r); }
+   x.closePath(); x.fill();
+   x.globalAlpha = .75 * k; x.strokeStyle = '#e6fbff'; x.lineWidth = 1; x.stroke();
+   x.beginPath(); for (let i = 0; i < 3; i++) { const an = i * Math.PI / 3 + q.seed; x.moveTo(q.x - Math.cos(an) * r * .7, q.y - Math.sin(an) * r * .7); x.lineTo(q.x + Math.cos(an) * r * .7, q.y + Math.sin(an) * r * .7); } x.stroke();
+  }
+  x.restore();
+ }
  for (const t of R.tg) {
   if (t.mine) {
    x.save(); x.globalCompositeOperation = 'lighter';
@@ -5932,6 +6047,21 @@ function draw(x) {
    spike(R0, R0 * .42, 0); x.fill(); x.stroke();
    x.fillStyle = shadeHex(f.c, .55);
    spike(R0 * .6, R0 * .3, .2); x.fill();
+   x.restore(); continue;
+  }
+  if (f.cryo) { // Cryogenic Stream: a narrow lattice beam of ice shards with binary-code sparks
+   const k = f.l / f.d, L = Math.max(10, f.max), q = SET.fl, GK = GLOW[SET.gw];
+   x.save(); x.translate(f.x, f.y); x.rotate(f.a);
+   if (GK > 0) { x.globalCompositeOperation = 'lighter'; const g = x.createLinearGradient(0, 0, L, 0); g.addColorStop(0, 'rgba(126,232,255,' + k * .55 * GK + ')'); g.addColorStop(1, 'rgba(126,232,255,0)'); x.fillStyle = g; x.beginPath(); x.moveTo(0, 0); x.lineTo(L, -L * Math.tan(f.h)); x.lineTo(L, L * Math.tan(f.h)); x.closePath(); x.fill(); }
+   x.globalCompositeOperation = 'source-over';
+   const n = [5, 9, 14][q];
+   for (let i = 0; i < n; i++) { // ice shards strewn along the stream
+    const u = (i + .5) / n, d = L * u, w = (Math.sin(f.seed + i * 7.1) * .5) * Math.tan(f.h) * d * 1.5, sz = 4 + 4 * (1 - u);
+    x.globalAlpha = k * (.9 - u * .4); x.fillStyle = i % 2 ? '#e6fbff' : '#7ee8ff';
+    x.beginPath(); x.moveTo(d + sz, w); x.lineTo(d, w - sz * .45); x.lineTo(d - sz * .8, w); x.lineTo(d, w + sz * .45); x.closePath(); x.fill();
+   }
+   x.globalAlpha = k * .9; x.strokeStyle = '#e6fbff'; x.lineWidth = 2; x.beginPath(); x.moveTo(8, 0); x.lineTo(L, 0); x.stroke();
+   if (q > 0) { x.font = "700 8px 'JetBrains Mono',monospace"; x.fillStyle = '#bff6ff'; for (let i = 0; i < [0, 5, 9][q]; i++) { const u = ((i * .37 + f.seed) % 1), d = 14 + (L - 14) * u; x.globalAlpha = k * .8; x.fillText((i + (f.seed | 0)) % 2 ? '1' : '0', d, Math.sin(i * 5.3 + f.seed) * Math.tan(f.h) * d); } }
    x.restore(); continue;
   }
   if (f.cone) {
@@ -6350,7 +6480,7 @@ function draw(x) {
  x.restore();
 
  // UI Overlay - Top Left HUD Card (HP, Shield, Dash)
- const BO = hasBarrier() ? 11 : 0; // extra row height when the Debugger's barrier bar is shown
+ const BB = hasBarrier() ? 11 : 0, BO = BB + 12; // BB: Debugger barrier row. +12: the Bandwidth row sits between shield and dash.
  x.save();
  x.textAlign = 'left';
  x.textBaseline = 'middle';
@@ -6360,8 +6490,8 @@ function draw(x) {
  x.strokeStyle = 'rgba(255, 255, 255, 0.14)';
  x.lineWidth = 1;
  x.beginPath();
- if (x.roundRect) x.roundRect(8, 8, 204, 68 + BO, 6);
- else x.rect(8, 8, 204, 68 + BO);
+ if (x.roundRect) x.roundRect(8, 8, 204, 80 + BO, 6);
+ else x.rect(8, 8, 204, 80 + BO);
  x.fill();
  x.stroke();
 
@@ -6391,6 +6521,17 @@ function draw(x) {
   x.fillStyle = '#7ee8ff'; x.fillText(b.ready ? 'BARRIER READY' : 'BARRIER ' + Math.ceil(b.t) + 's', 128, 40);
  }
 
+ // 2b. Bandwidth bar: lagging trail shows spending, chevrons show passive regen, flashes red when a cast is refused for lack of BW
+ {
+  const by = 37 + BB, bwm = Math.max(1, G.bwMax || 1), bf = cl((G.bw || 0) / bwm, 0, 1), tf = cl((G.bwTrail || 0) / bwm, 0, 1), lowFlash = R.bwFlash > 0;
+  x.fillStyle = 'rgba(255, 255, 255, 0.12)'; x.fillRect(14, by, 108, 6);
+  if (tf > bf) { x.fillStyle = 'rgba(255,255,255,.5)'; x.fillRect(14 + 108 * bf, by, 108 * (tf - bf), 6); }
+  x.fillStyle = lowFlash && Math.floor(R.t * 14) % 2 ? '#ff5c7a' : '#8f7bff'; x.fillRect(14, by, 108 * bf, 6);
+  if (G.bwRegenOn) { x.fillStyle = 'rgba(255,255,255,.55)'; const ox = (R.t * 40) % 12; for (let i = 0; i < 9; i++) { const cx = 14 + i * 12 + ox; if (cx < 14 + 108 * bf - 3 && cx > 14) x.fillRect(cx, by + 2, 2, 2); } }
+  x.font = "700 10.5px 'JetBrains Mono',monospace"; x.fillStyle = lowFlash ? '#ff8aa0' : (G.bw >= bwm - .5 ? '#cfc6ff' : '#b9adff');
+  x.fillText(lowFlash ? 'LOW BW' : `BW ${Math.floor(G.bw || 0)}/${bwm}${G.bw >= bwm - .5 ? ' MAX' : ''}`, 128, by + 4);
+ }
+
  // 3. Dash Meter
  x.fillStyle = 'rgba(255, 255, 255, 0.12)';
  x.fillRect(14, 37 + BO, 108, 6);
@@ -6404,6 +6545,7 @@ function draw(x) {
  x.beginPath(); x.arc(18, 55 + BO, 3, 0, Math.PI * 2); x.fill();
  x.font = "700 9px 'JetBrains Mono',monospace";
  x.fillText(R.combatMode ? 'COMBAT MODE // ACTIVE' : 'COMBAT MODE // OFF', 27, 55 + BO);
+ { const wd = wandOf(G.wand); x.fillStyle = wd.col; x.fillText('WAND ' + wd.glyph + ' ' + wd.short, 14, 69 + BO); } // equipped wand
  x.restore();
 
  x.save();
@@ -6553,7 +6695,7 @@ function draw(x) {
   const bx = 10 + i * (cw + 4), bottom = H - 8;
   if (SET.cc === 1) {
    // Compact: plain text, wrapped so every modifier shows, with a rate bar.
-   const spd0 = SPELLS[k.c?.sp], dis0 = k.dis > 0;
+   const spd0 = SPELLS[k.c?.sp], dis0 = k.dis > 0 || !!(k.blk ??= !!stats(k.c, ST).blocked);
    const mods0 = (k.c?.mods || []).map((m, mi) => (MODS[m]?.n || m) + (k.c.mv && k.c.mv[mi] > 1 ? ' v' + k.c.mv[mi] : ''));
    x.save(); x.font = `700 10px 'JetBrains Mono',monospace`; x.textAlign = 'left'; x.textBaseline = 'alphabetic';
    const lines = []; let cur = '';
@@ -6574,7 +6716,7 @@ function draw(x) {
    lines.slice().reverse().forEach((ln2, li) => x.fillText(ln2, bx, bottom - 23 - li * 12));
    x.restore(); return;
   }
-  const spd = SPELLS[k.c?.sp], rc = RC[spd?.r] || '#9d92b5', dis = k.dis > 0;
+  const spd = SPELLS[k.c?.sp], rc = RC[spd?.r] || '#9d92b5', dis = k.dis > 0 || !!(k.blk ??= !!stats(k.c, ST).blocked);
   const mods = (k.c?.mods || []).map((m, mi) => (MODS[m]?.n || m) + (k.c.mv && k.c.mv[mi] > 1 ? ' v' + k.c.mv[mi] : ''));
   x.font = `700 9px 'JetBrains Mono',monospace`;
   const rows = [[]]; let cx = 0;
@@ -7069,13 +7211,14 @@ export function render() {
  }
 
  // DRAFT VIEW (Persistent pipeline & deck management)
- const cp = compilePipeline(G.slots, ST), n = nSlots(), c = G.cfg, ok = cp.out.some(cc => SPELLS[cc.sp]?.dmg);
+ const cp = compilePipeline(G.slots, ST), n = nSlots(), c = G.cfg, ok = cp.out.some(cc => SPELLS[cc.sp]?.dmg && !stats(cc, ST).blocked);
  const bd = new Set();
+ const wandBlocked = blockedCards();
  {
   let pm = [];
   G.slots.forEach(cc => {
    if (isMod(cc.k)) pm.push(cc);
-   else { pm.forEach(m => { if (!okMod(m.k, cc.k)) bd.add(m.id); }); pm = []; }
+   else { pm.forEach(m => { if (!okMod(m.k, cc.k)) bd.add(m.id); }); if (!wandAccepts(G.wand, cc.k, SPELLS[cc.k])) bd.add(cc.id); pm = []; }
   });
  }
  let sl = '';
@@ -7108,7 +7251,11 @@ export function render() {
   <div class="grid">${sl}</div>
   ${G.sandbox ? `<div class="panel" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><b style="color:var(--mult)">SANDBOX // ADD CARD</b><select id="sbx-card" class="sbx-sel">${sbxCardOpts()}</select><select id="sbx-ver" class="sbx-sel"><option value="1">v1</option><option value="2">v2</option><option value="3">v3</option></select><button class="btn g sm" data-act="sbx-add">ADD TO PIPELINE</button><button class="btn g sm" data-act="sbx-add-hand">ADD TO HAND</button></div>` : ''}
 
-  <div class="panel"><pre>${ok ? cp.out.map(cc => lineOf(cc, ST)).join('\n') : '// slot at least one damage spell'}${cp.dead.length ? '\n// warning: trailing modifier does nothing' : ''}</pre></div>
+  <div class="panel"><b>WAND</b> <span style="color:${wandOf(G.wand).col}">${wandOf(G.wand).glyph} ${wandOf(G.wand).n}</span>
+   <p class="lbl" style="margin:4px 0">${wandOf(G.wand).d}</p>
+   <div class="row" style="gap:6px;flex-wrap:wrap">${(G.wands || ['universal']).map(id => `<button class="btn g sm ${G.wand === id ? 'act' : ''}" data-act="wand-equip" data-wand="${id}" title="${wandOf(id).d}">${wandOf(id).glyph} ${wandOf(id).short}${G.wand === id ? ' (equipped)' : ''}</button>`).join('')}</div>
+   ${wandBlocked.length ? `<p class="lbl" style="color:#ff6a6a;margin:4px 0">// ${wandBlocked.length} pipeline spell${wandBlocked.length > 1 ? 's' : ''} cannot be fired by this wand (${[...new Set(wandBlocked.map(cc => SPELLS[cc.sp].n))].join(', ')}). They will not fire. Switch wands or change the pipeline.</p>` : ''}</div>
+  <div class="panel"><pre>${ok ? cp.out.map(cc => lineOf(cc, ST)).join('\n') : '// slot at least one damage spell the equipped wand can fire'}${cp.dead.length ? '\n// warning: trailing modifier does nothing' : ''}</pre></div>
 
   <p class="lbl">Hand (tap to slot; double-tap to stash in Recycle Bin; if pipeline is full, tap a hand card, then a pipeline card)</p>
   <div class="grid">${G.hand.map((cc, i) => cardH(cc.k, `data-hand="${i}"`, 0, cc.v, (G.fz === cc.id ? 'fz ' : '') + (G.fs === cc.id || (G.sel && G.sel.id === cc.id) ? 'selc' : G.fs && G.hand.find(x => x.id === G.fs)?.k === cc.k ? 'glow' : ''), G)).join('')}</div>
@@ -7346,6 +7493,9 @@ $('#app').addEventListener('click', e => {
   const k = $('#sbx-card')?.value, v = +($('#sbx-ver')?.value || 1);
   if (k && (SPELLS[k] || MODS[k])) { G.sbxCard = k; const c = mk(k, v); G.deck.push(c); if (d.act === 'sbx-add' && G.slots.length < nSlots()) G.slots.push(c); else G.hand.push(c); sfx('heal'); }
   render(); return;
+ } else if (d.act === 'wand-equip') {
+  if (equipWand(d.wand)) { const nb = blockedCards().length; G.msg = `${wandOf(G.wand).n} equipped.` + (nb ? ` Warning: ${nb} pipeline spell${nb > 1 ? 's' : ''} cannot be fired by it.` : ''); sfx('heal'); }
+  render();
  } else if (d.act === 'clear') {
   const n = G.slots.filter(c => c.lk).length;
   G.slots.forEach(leave);

@@ -3,6 +3,7 @@ import { ARENAS, EN, BOSSES, HOSTS, SPELLS, MODS } from './data.js';
 import { cl, ri, pick, okMod } from './helpers.js';
 import { snd } from './audio.js';
 import { drawThemed } from './themes.js';
+import { applyWand, bwCost, wandOf, wandBlockText } from './wands.js';
 
 const dynamicWalls = new Map();
 export function setDynamicWalls(arena, walls) {
@@ -91,7 +92,8 @@ export function stats(c, ST) {
  if (a.k === 'mine') a.rate = Math.min(a.rate, 1 / 1.4);
  a.size *= ST.stack ? 1 + Math.min(.16, .02 * nm) : 1;
  a.nm = nm;
- return a;
+ // The equipped wand has the last word: it may block the card (a.blocked) or transform the attack (a.wandFx etc.). ST.wand is set by calcST().
+ return applyWand(a, c, ST.wand || 'universal', SPELLS[c.sp]);
 }
 
 export function lineOf(c, ST) {
@@ -111,9 +113,13 @@ export function lineOf(c, ST) {
   [a.pull, 'pulls'],
   [a.crit, 'always crits'],
   [a.pierce > (SPELLS[c.sp]?.pierce || 0) && a.k === 'proj', 'pierces'],
-  [a.sh, '+' + a.sh + ' shield']
+  [a.sh, '+' + a.sh + ' shield'],
+  [a.wandFx === 'cryo', 'cryogenic stream'],
+  [bwCost(a, ST) > 0, bwCost(a, ST) + ' BW/cast']
  ].filter(x => x[0]).map(x => x[1]);
 
+ const pre = c.mods.map((k, i) => `<u>${MODS[k].n}${c.mv && c.mv[i] > 1 ? ' v' + c.mv[i] : ''}</u> > `).join('');
+ if (a.blocked) return `${pre}<i>${SPELLS[c.sp].n}</i> // <b style="color:#ff6a6a">BLOCKED: ${wandBlockText(a.wand, SPELLS[c.sp])}</b>`;
  return `${c.mods.map((k, i) => `<u>${MODS[k].n}${c.mv && c.mv[i] > 1 ? ' v' + c.mv[i] : ''}</u> > `).join('')}<i>${SPELLS[c.sp].n}</i> // ${a.dmg ? Math.round(a.dmg) + ' dmg, ' : ''}${a.rate.toFixed(2)}/s${f.length ? ': ' + f.join(', ') : ''}`;
 }
 
