@@ -50,8 +50,97 @@ export const WANDS = {
    a.bw = CRYO.bw;                           // BASE Bandwidth per stream tick (wand effects and modifiers may change the effective cost)
   },
   bwMul: 1, bwAdd: 0
+ },
+ railgun: {
+  n: 'Railgun Wand', short: 'RAILGUN', glyph: '=', col: '#b48cff', hue: 270,
+  d: 'Only ping() fires. A slow, heavy rail shot that reaches across the room. Every bug it passes takes more damage than the last: line them up.',
+  accepts: { spells: ['ping'], kinds: [] }, transforms: ['ping'], fx: { ping: 'rail' },
+  art: [
+   [0, 1, 19, 5, K], [1, 2, 17, 1, '#b48cff'], [1, 4, 17, 1, '#b48cff'], [1, 3, 17, 1, '#2a2f45'], [2, 3, 6, 1, '#6c7aa8'],
+   [0, 2, 3, 3, '#3a4560'], [4, 3, 1, 1, '#e4ecfa'], [9, 3, 1, 1, '#e4ecfa'], [14, 3, 1, 1, '#e4ecfa'], [15, 2, 2, 3, '#1b2236'],
+   [17, 2, 2, 3, '#ffffff'], [18, 3, 1, 1, '#7ee8ff'], [19, 3, 1, 1, '#7ee8ff'], [17, 1, 1, 1, '#d9c2ff'], [17, 5, 1, 1, '#d9c2ff']
+  ],
+  xform(a, c) {
+   if (c.sp !== 'ping') return;
+   a.wandFx = 'rail'; a.col = '#b48cff';
+   a.dmg *= RAIL.dmgMul; a.rate *= RAIL.rateMul; a.railLen = RAIL.len; a.railRamp = RAIL.ramp; a.knock = Math.max(a.knock || 0, RAIL.knock);
+   a.bw = RAIL.bw;
+  }
+ },
+ pyromancer: {
+  n: 'Pyromancer Wand', short: 'PYROMANCER', glyph: '^', col: '#ff7a45', hue: 18,
+  d: 'Only fireball() fires. It becomes a napalm shell: it bursts on the first thing it touches and leaves a burning patch on the floor.',
+  accepts: { spells: ['fireball'], kinds: [] }, transforms: ['fireball'], fx: { fireball: 'pyro' },
+  art: [
+   [1, 1, 13, 5, K], [2, 2, 11, 3, '#8a4a2b'], [2, 4, 11, 1, '#5e2f1b'], [3, 2, 7, 1, '#c9783f'], [2, 2, 3, 3, '#3b1d12'],
+   [6, 2, 1, 3, '#e2b24a'], [10, 2, 1, 3, '#e2b24a'], [14, 2, 1, 3, '#e2b24a'],
+   [15, 2, 3, 3, '#ff7a45'], [16, 1, 2, 5, '#ff7a45'], [17, 0, 1, 7, '#ffb04f'], [18, 2, 2, 3, '#ffd36a'], [19, 3, 1, 1, '#fff7db'], [16, 3, 2, 1, '#fff2c4']
+  ],
+  xform(a, c) {
+   if (c.sp !== 'fireball') return;
+   a.wandFx = 'pyro'; a.col = '#ff7a45';
+   a.sp *= PYRO.speedMul; a.rad = Math.max(a.rad, PYRO.rad); a.pierce = 0; a.burn = Math.max(1, a.burn || 0);
+   a.pyroR = PYRO.blastR; a.pyroBlast = PYRO.blastMul; a.pyroPatch = PYRO.patch;
+   a.bw = PYRO.bw;
+  }
+ },
+ swarm: {
+  n: 'Swarm Wand', short: 'SWARM', glyph: ':', col: '#9dff7a', hue: 100,
+  d: 'Only bolt() fires. One bolt becomes a cloud of small homing drones that spread out and hunt scattered bugs. Each drone hits weakly and does not pierce.',
+  accepts: { spells: ['bolt'], kinds: [] }, transforms: ['bolt'], fx: { bolt: 'swarm' },
+  art: [
+   [1, 2, 11, 3, K], [2, 3, 9, 1, '#6bb04a'], [2, 2, 9, 1, '#9dff7a'], [2, 4, 9, 1, '#3d6e2a'], [1, 2, 3, 3, '#24401a'], [5, 3, 1, 1, '#e8ffd9'], [8, 3, 1, 1, '#e8ffd9'],
+   [12, 3, 2, 1, '#9dff7a'], [14, 1, 2, 2, '#9dff7a'], [14, 4, 2, 2, '#9dff7a'], [17, 0, 2, 2, '#caff9d'], [17, 3, 2, 2, '#caff9d'], [17, 5, 2, 2, '#caff9d'],
+   [14, 3, 3, 1, '#3d6e2a'], [15, 1, 1, 1, '#e8ffd9'], [15, 5, 1, 1, '#e8ffd9']
+  ],
+  xform(a, c) {
+   if (c.sp !== 'bolt') return;
+   a.wandFx = 'swarm'; a.col = '#9dff7a';
+   a.swarmN = SWARM.n; a.dmg *= SWARM.dmgMul; a.pierce = 0; a.home = Math.max(1, a.home || 0); a.turn = Math.max(a.turn || 0, SWARM.turn);
+   a.sp *= SWARM.speedMul; a.rad = SWARM.rad;
+   a.bw = SWARM.bw;
+  }
+ },
+ stormcaller: {
+  n: 'Stormcaller Wand', short: 'STORMCALLER', glyph: '~', col: '#ffe066', hue: 50,
+  d: 'Only chain() fires. Lightning no longer hops in a single line: every bug struck forks the arc to two more nearby, and each shock briefly slows what it touches.',
+  accepts: { spells: ['chain'], kinds: [] }, transforms: ['chain'], fx: { chain: 'storm' },
+  art: [
+   [1, 1, 12, 5, K], [2, 2, 10, 3, '#5b4b9a'], [2, 4, 10, 1, '#3a2f66'], [3, 2, 7, 1, '#8f7bff'], [2, 2, 3, 3, '#241c44'], [6, 3, 1, 1, '#ffe066'], [9, 3, 1, 1, '#ffe066'],
+   [13, 2, 2, 3, '#ffe066'], [15, 1, 1, 2, '#ffe066'], [16, 0, 2, 2, '#fff5b0'], [14, 4, 2, 1, '#ffe066'], [15, 5, 2, 2, '#ffe066'], [17, 4, 2, 1, '#fff5b0'], [18, 3, 2, 1, '#ffffff'], [16, 3, 2, 1, '#ffd23f']
+  ],
+  xform(a, c) {
+   if (c.sp !== 'chain') return;
+   a.wandFx = 'storm'; a.col = '#ffe066';
+   a.stormFork = STORM.fork; a.stormShock = STORM.shock; a.dmg *= STORM.dmgMul;
+   a.bw = STORM.bw;
+  }
+ },
+ demolitionist: {
+  n: 'Demolitionist Wand', short: 'DEMOLITION', glyph: 'o', col: '#ff5c7a', hue: 350,
+  d: 'Only mine() fires. One mine becomes a row of three small charges laid along your aim that detonate in a rolling ripple. Needs room for three mines.',
+  accepts: { spells: ['mine'], kinds: [] }, transforms: ['mine'], fx: { mine: 'cluster' },
+  art: [
+   [1, 2, 10, 3, K], [2, 3, 8, 1, '#7a2a3a'], [2, 2, 8, 1, '#b84a5e'], [2, 4, 8, 1, '#4a1a26'], [1, 2, 3, 3, '#2a0f16'], [5, 3, 1, 1, '#ffd0d8'],
+   [11, 1, 6, 5, K], [12, 0, 4, 7, K], [12, 1, 4, 5, '#2a2f3a'], [11, 2, 6, 3, '#2a2f3a'], [13, 2, 2, 3, '#ff5c7a'], [13, 3, 2, 1, '#ffd0d8'], [17, 3, 2, 1, '#e2b24a'], [18, 2, 1, 1, '#ffd23f'], [19, 1, 1, 1, '#ffd23f'], [12, 1, 1, 1, '#6b7385'], [15, 5, 1, 1, '#6b7385']
+  ],
+  xform(a, c) {
+   if (c.sp !== 'mine') return;
+   a.wandFx = 'cluster'; a.col = '#ff5c7a';
+   a.clusterN = DEMO.n; a.dmg *= DEMO.dmgMul; a.rad *= DEMO.radMul; a.clusterGap = DEMO.gap; a.clusterRipple = DEMO.ripple;
+   a.bw = DEMO.bw;
+  }
  }
 };
+
+// ---- PROVISIONAL numbers for the specialized wands (NOT FINAL BALANCE). `bw` = Bandwidth per successful cast of the transformed attack. ----
+// Rough target: a held wand drains about 8-10 BW/s against the shared 6 BW/s regen, i.e. roughly 30-50 s of continuous fire from a full 100 BW.
+export const RAIL = { dmgMul: 2.4, rateMul: .7, len: 560, ramp: .3, knock: 90, bw: 14 };      // ping 15 dmg @0.77/s -> 36 dmg @0.54/s, +30% per bug already pierced. ~7.5 BW/s
+export const PYRO = { speedMul: .8, rad: 6, blastR: 56, blastMul: .75, bw: 8,                 // fireball: direct hit + 75% blast, then a burn patch. ~8 BW/s
+ patch: { r: 40, life: 3, tick: .5, dmgMul: .22, max: 8 } };
+export const SWARM = { n: 5, dmgMul: .42, turn: 5.5, speedMul: .8, rad: 3, bw: 5 };            // bolt 7 dmg -> five 2.9 dmg drones. ~9 BW/s at 1.82/s
+export const STORM = { fork: 2, shock: .5, dmgMul: 1, bw: 9, cap: 9, reach: 120, falloff: .68 };                                  // chain: branching tree, each hit slows briefly. ~8 BW/s
+export const DEMO = { n: 3, dmgMul: .6, radMul: .78, gap: 34, ripple: .14, bw: 8 };             // mine: three 60%-damage mines in a line. ~3.3 BW/s (mine is a slow card)
 
 // Provisional, configurable Cryogenic Stream numbers. NOT FINAL BALANCE.
 export const CRYO = {
@@ -126,3 +215,6 @@ export const specialWands = () => Object.keys(WANDS).filter(id => id !== 'univer
 export const wandsOffered = (owned = [], stored = []) => specialWands().filter(id => !owned.includes(id) && !stored.includes(id));
 // The Universal Wand can never be stored (it is the permanent fallback), and the equipped wand can never be stored.
 export const canStoreWand = (id, equipped, owned = []) => id !== 'universal' && id !== equipped && owned.includes(id);
+
+// Short labels shown in the pipeline preview for transformed attacks.
+export const FX_LABEL = { cryo: 'cryogenic stream', rail: 'rail shot', pyro: 'napalm shell + burn patch', swarm: 'drone swarm', storm: 'forking lightning', cluster: 'cluster mines' };

@@ -1,7 +1,7 @@
 import { W, H, GW, GH, PLAN, CHAOS, setArenaSize } from './constants.js';
 import { RAR, RC, SPELLS, MODS, UPG, HOSTS, DK, WORLDS, EN, ARENAS, BOSSES, RACE, LEAK, SEGFAULT, PLAYER_SHIELD } from './data.js';
 import { ROOM_TYPES, CYCLES, SHOP, SLOTS, redrawCost, slotHandTable, slotRTP, spinSlots, buildLayerMap, buildBossMap, ENTRY_SPOT, DIR_OPP } from './rooms.js';
-import { WANDS, wandOf, wandAccepts, bwCost, bwMaxFor, bwRegen, clampBW, CRYO, WAND_ACQ, wandsOffered, canStoreWand } from './wands.js';
+import { WANDS, wandOf, wandAccepts, bwCost, bwMaxFor, bwRegen, clampBW, CRYO, STORM, WAND_ACQ, wandsOffered, canStoreWand } from './wands.js';
 import { wandIconHTML, wandCanvas } from './wandart.js';
 import { $, ri, pick, cl, shuffle, css, mk, defOf, isMod, maxV, okMod, wo, xText, xl, cardH } from './helpers.js';
 import { renderOSWindows } from './probability.js';
@@ -1921,14 +1921,22 @@ function fire(c) {
 
  if (a.k === 'proj') {
   const a0 = aimAngle();
-  for (let i = 0; i < a.pc; i++) {
+  if (a.wandFx === 'swarm') { // Swarm Wand: one bolt becomes a fan of small homing drones (count x map() spread), each weak and non-piercing
+   const n = a.swarmN * Math.max(1, a.pc);
+   for (let i = 0; i < n; i++) {
+    const an = a0 + (n > 1 ? (i / (n - 1) - .5) * 1.1 : 0) + (Math.random() - .5) * .25, sp = a.sp * (.85 + Math.random() * .3);
+    R.pr.push({ x: p.x, y: p.y, vx: Math.cos(an) * sp, vy: Math.sin(an) * sp, a, shape: 'drone', life: 2.8, hit: new Set(), pierce: 0, bounce: a.bounce, r: Math.min(a.rad * a.size, 8) });
+   }
+  } else for (let i = 0; i < a.pc; i++) {
    const an = a0 + (a.pc > 1 ? (i - (a.pc - 1) / 2) * .3 : 0);
-   R.pr.push({ x: p.x, y: p.y, vx: Math.cos(an) * a.sp, vy: Math.sin(an) * a.sp, a, shape: c.c.sp, life: 2.2, hit: new Set(), pierce: a.pierce, bounce: a.bounce, r: Math.min(a.rad * a.size, 16) });
+   R.pr.push({ x: p.x, y: p.y, vx: Math.cos(an) * a.sp, vy: Math.sin(an) * a.sp, a, shape: a.wandFx === 'pyro' ? 'napalm' : c.c.sp, life: 2.2, hit: new Set(), pierce: a.pierce, bounce: a.bounce, r: Math.min(a.rad * a.size, 16) });
   }
  } else if (a.k === 'nova') {
   const nr = a.rad * a.area;
   R.fx.push({ nova: 1, x: p.x, y: p.y, r: 0, max: nr, l: .34, d: .34, c: a.col });
   blast(p.x, p.y, nr, a.dmg, a, null, 0, 1);
+ } else if (a.k === 'chain' && a.wandFx === 'storm') {
+  stormChain(a);
  } else if (a.k === 'chain') {
   let t = aimTarget(a.rad * a.area), from = { x: p.x, y: p.y }, seen = new Set(), j = a.jumps + 1;
   while (t && j-- > 0) {
@@ -1967,7 +1975,8 @@ function fire(c) {
   for (let i = 0; i < a.pc; i++) {
    const an = a0 + (a.pc > 1 ? (i - (a.pc - 1) / 2) * .28 : 0), ca = Math.cos(an), sa = Math.sin(an);
    let L = 0;
-   while (L < 300 && !wallHit(G.cfg.arena, p.x + ca * L, p.y + sa * L, 2)) L += 6;
+   const rail = a.wandFx === 'rail', maxL = rail ? a.railLen : 300;
+   while (L < maxL && !wallHit(G.cfg.arena, p.x + ca * L, p.y + sa * L, 2)) L += 6;
    const hx = p.x + ca * L, hy = p.y + sa * L;
    const hitWall = wallHit(G.cfg.arena, hx, hy, 2);
    const tg = R.en.filter(e => {
@@ -1977,6 +1986,12 @@ function fire(c) {
     return Math.abs(-dx * sa + dy * ca) < e.r + 3 * a.size;
    });
    const anyHit = hitWall || tg.length > 0;
+   if (rail) { // Railgun: heavy, lingering white-violet rail with a muzzle ring and sparks along the whole path
+    tg.sort((e1, e2) => Math.hypot(e1.x - p.x, e1.y - p.y) - Math.hypot(e2.x - p.x, e2.y - p.y));
+    R.lines.push({ x1: p.x, y1: p.y, x2: hx, y2: hy, l: .34, c: '#b48cff', w: 11 + a.size * 2, laser: 1, ping: 1, core: '#ffffff', impact: anyHit ? 1 : 0 });
+    ring(p.x + ca * 14, p.y + sa * 14, 22, '#d9c2ff', .22); R.shake = Math.max(R.shake, 4);
+    for (let d = 20; d < L; d += 42) part(p.x + ca * d, p.y + sa * d, (Math.random() - .5) * 60, (Math.random() - .5) * 60, .35, Math.random() < .5 ? '#d9c2ff' : '#ffffff', 2 + Math.random() * 1.5, 0);
+   } else
    R.lines.push({ x1: p.x, y1: p.y, x2: hx, y2: hy, l: .18, c: a.col, w: 3.6 + a.size * 2.2, laser: 1, ping: 1, core: shadeHex(a.col, .75), impact: anyHit ? 1 : 0 });
    // Starburst only where the beam ends AND it actually hit something (wall or enemy).
    if (anyHit) R.fx.push({ star: 1, x: hx, y: hy, r: 0, max: 17 + a.size * 3, l: .26, d: .26, c: a.col, seed: Math.random() * 6 });
@@ -1987,8 +2002,9 @@ function fire(c) {
    }
    for (const e of tg) {
     R.fx.push({ star: 1, small: 1, x: e.x, y: e.y, r: 0, max: 8 + a.size * 1.5, l: .2, d: .2, c: a.col, seed: Math.random() * 6 });
-    hitE(e, a.dmg, a, p);
+    hitE(e, a.dmg, a, p, undefined, rail ? 1 + a.railRamp * tg.indexOf(e) : 1); // rail: +30% damage for every bug already pierced
    }
+   if (rail && tg.length >= 2) txt(hx, hy - 16, 'x' + tg.length + ' RAIL', '#d9c2ff', 11);
   }
  } else if (a.k === 'melee') {
   const a0 = aimAngle(), rg = 66 * a.area;
@@ -2016,14 +2032,58 @@ function fire(c) {
   sfx('cast_orbit', { x: p.x });
   p.orb = { t: Math.max(4.6, 1 / a.rate + .4), n: nb, a: { ...a, knock: Math.max(a.knock || 0, 150) }, ang: 0, zt: .5, bl: Array.from({ length: nb }, () => ({ c: 3, dead: 0 })) };
  } else if (a.k === 'mine') {
-  if (R.tg.filter(t => t.mine && t.own === 'p').length >= 6) return false; // rejected: no BW charged
-  R.tg.push({ mine: 1, x: p.x, y: p.y, r: a.rad * a.area, t: .9, max: .9, dmg: a.dmg, own: 'p', c: a.col, a });
+  const nM = a.wandFx === 'cluster' ? a.clusterN : 1;
+  if (R.tg.filter(t => t.mine && t.own === 'p').length + nM > 6) return false; // rejected (cap of 6 live mines): no BW charged
+  if (a.wandFx === 'cluster') { // Demolitionist: a row of small charges along the aim; fuses ripple outward so the blasts roll through a lane
+   const a0 = aimAngle(); let lx = p.x, ly = p.y;
+   for (let i = 0; i < nM; i++) {
+    const nx = p.x + Math.cos(a0) * a.clusterGap * (i + 1), ny = p.y + Math.sin(a0) * a.clusterGap * (i + 1);
+    if (!wallHit(G.cfg.arena, nx, ny, 8)) { lx = nx; ly = ny; }
+    R.tg.push({ mine: 1, x: lx, y: ly, r: a.rad * a.area, t: .9 + i * a.clusterRipple, max: .9 + i * a.clusterRipple, dmg: a.dmg, own: 'p', c: a.col, a });
+    ring(lx, ly, 10, a.col, .2);
+   }
+  } else R.tg.push({ mine: 1, x: p.x, y: p.y, r: a.rad * a.area, t: .9, max: .9, dmg: a.dmg, own: 'p', c: a.col, a });
  } else if (a.k === 'self') {
   if (a.shv) { p.shx = Math.min((p.shx || 0) + a.shv * ST.shm * a.area, PLAYER_SHIELD.maxBonus); ring(p.x, p.y, 24, '#5ee0d0', .3); txt(p.x, p.y - 16, '+MAX SHIELD', '#5ee0d0', 10); }
   if (a.hpv) healP(a.hpv * ST.hm * a.area);
  }
 }
 
+// ---- Stormcaller Wand: chain() becomes a BRANCHING lightning tree (each struck bug forks to nearby bugs). Reuses hitE / lightning lines / slow status. ----
+function stormChain(a) {
+ const p = R.p, first = aimTarget(a.rad * a.area); if (!first) return;
+ const seen = new Set([first]); let level = [{ t: first, from: { x: p.x, y: p.y } }], depth = 0, hits = 0;
+ while (level.length && depth <= a.jumps && hits < STORM.cap) {
+  const next = [];
+  for (const n of level) {
+   if (hits >= STORM.cap) break;
+   R.lines.push({ x1: n.from.x, y1: n.from.y, x2: n.t.x, y2: n.t.y, l: .22, c: a.col, lightning: 1, seed: Math.random(), w: Math.max(1.4, 3 - depth * .45) });
+   hitE(n.t, a.dmg, a, n.from, undefined, Math.pow(STORM.falloff, depth) * (n.t.boss ? .75 : 1)); hits++;
+   if (!n.t.dead && a.stormShock) { n.t.slow = Math.max(n.t.slow || 0, a.stormShock); n.t.sf = Math.min(n.t.sf || 1, .6); } // shock: brief slow
+   if (depth < a.jumps) {
+    const kids = R.en.filter(e => !e.dead && !seen.has(e) && Math.hypot(e.x - n.t.x, e.y - n.t.y) < STORM.reach).sort((e1, e2) => Math.hypot(e1.x - n.t.x, e1.y - n.t.y) - Math.hypot(e2.x - n.t.x, e2.y - n.t.y)).slice(0, a.stormFork);
+    for (const k of kids) { seen.add(k); next.push({ t: k, from: { x: n.t.x, y: n.t.y } }); }
+   }
+  }
+  level = next; depth++;
+ }
+}
+// ---- Pyromancer Wand: the napalm shell bursts on first contact and leaves a burning patch (ticks the existing burn status) ----
+function pyroBoom(q, skip) {
+ const a = q.a, r = a.pyroR * a.area, P = a.pyroPatch, ba = { ...a, crit: 0, knock: 0 };
+ blast(q.x, q.y, r, a.dmg * a.pyroBlast, ba, skip, 0, 0);
+ R.burnZ ||= []; if (R.burnZ.length >= P.max) R.burnZ.shift();
+ R.burnZ.push({ x: q.x, y: q.y, r: P.r * a.area, l: P.life, m: P.life, t: 0, tick: P.tick, a: { ...ba, dmg: a.dmg * P.dmgMul }, seed: Math.random() * 9 });
+}
+function updBurnZ(dt) {
+ if (!R.burnZ || !R.burnZ.length) return;
+ for (const z of R.burnZ) {
+  z.l -= dt; z.t -= dt;
+  if (z.t <= 0) { z.t = z.tick; for (const e of R.en) if (!e.dead && Math.hypot(e.x - z.x, e.y - z.y) < z.r + e.r * .5) hitE(e, z.a.dmg, z.a, null); }
+  if (Math.random() < dt * 14) part(z.x + (Math.random() - .5) * z.r * 1.4, z.y + (Math.random() - .5) * z.r * 1.4, 0, -30, .5, Math.random() < .5 ? '#ff7a45' : '#ffd36a', 2 + Math.random() * 2, 1);
+ }
+ R.burnZ = R.burnZ.filter(z => z.l > 0);
+}
 // ---- Cryomancer Wand: stdout() becomes a Cryogenic Stream (real damage + freeze + slowing floor ice). Reuses hitE / freeze / wallHit. ----
 function cryoStream(a, c) {
  const p = R.p, a0 = aimAngle(), mapStep = a.pc > 1 ? (a.pc - 1) / 2 : 0, F = CRYO.frost;
@@ -4450,7 +4510,7 @@ function updPr(dt) {
      if (!f) { q.vx *= -1; q.vy *= -1; }
      q.x = ox; q.y = oy; q.hit.clear();
     } else {
-     q.life = 0; burst(q.x, q.y, a.col, 4); break;
+     q.life = 0; burst(q.x, q.y, a.col, 4); if (a.wandFx === 'pyro') pyroBoom(q, null); break;
     }
    }
    const mc = R.leak && R.leak.mc;
@@ -4470,6 +4530,7 @@ function updPr(dt) {
       if (neg && Math.random() < .5) txt(e.x, e.y - e.r - 8, 'NEGATED', '#5fe0a0', 9);
      }
      burst(q.x, q.y, a.col, 3);
+     if (a.wandFx === 'pyro') { pyroBoom(q, e); q.pierce = 0; }
      if (a.expl) blast(q.x, q.y, 50 * a.area * (1 + .3 * (a.expl - 1)), a.dmg * (.6 + .2 * (a.expl - 1)), { col: a.col, crit: 0 }, e, 0);
      if (a.pull) {
       const reach = [110, 155, 205][a.pull - 1] || 205;
@@ -4545,7 +4606,7 @@ function step(dt) {
  if (R.shopOpen || (R.room && G.mapMode === 2)) { updMisc(dt); return; }
  if (R.sandbox && R.sbDash) R.p.dcd = 0;
  updP(dt);
- updBW(dt); updFrost(dt);
+ updBW(dt); updFrost(dt); updBurnZ(dt);
  if (R.room && R.room.cleared) { updPr(dt); updMisc(dt); roomTick(dt); return; } // clear or safe room: just walk, use doors, interact
  updSpawn(dt); updCasts(dt); updPr(dt); updEn(dt); updMisc(dt);
  if (R.room && !R.end && R.en.length === 0 && R.budget <= .3) { roomClear('p'); return; }
@@ -5239,6 +5300,14 @@ function drawProjectile(ctx, q, enemy = false) {
  } else if (!enemy && shape === 'bolt') {
   ctx.beginPath(); ctx.arc(0, 0, r * 1.04, 0, 7); ctx.fill(); ctx.stroke();
   ctx.shadowBlur = 0; ctx.fillStyle = '#eaffff'; ctx.beginPath(); ctx.arc(r * .18, -r * .15, Math.max(1.1, r * .25), 0, 7); ctx.fill();
+ } else if (!enemy && shape === 'napalm') { // Pyromancer shell: dark armoured core inside a roaring fire blob
+  fireBlob(ctx, r * 1.45, q.x * .05 + q.y * .03); ctx.fill(); ctx.stroke();
+  ctx.shadowBlur = 0; ctx.fillStyle = '#ffb04f'; fireBlob(ctx, r * .98, 2.1); ctx.fill();
+  ctx.fillStyle = '#3b1d12'; ctx.beginPath(); ctx.arc(0, 0, r * .52, 0, 7); ctx.fill();
+  ctx.fillStyle = '#ff5c2a'; ctx.beginPath(); ctx.arc(r * .12, -r * .1, Math.max(1.2, r * .2), 0, 7); ctx.fill();
+ } else if (!enemy && shape === 'drone') { // Swarm drone: tiny winged diamond
+  ctx.beginPath(); ctx.moveTo(r * 1.9, 0); ctx.lineTo(0, -r * 1.05); ctx.lineTo(-r * 1.5, -r * .35); ctx.lineTo(-r * .8, 0); ctx.lineTo(-r * 1.5, r * .35); ctx.lineTo(0, r * 1.05); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.shadowBlur = 0; ctx.fillStyle = '#eaffd9'; ctx.beginPath(); ctx.arc(r * .5, 0, Math.max(.9, r * .3), 0, 7); ctx.fill();
  } else if (shape === 'lance') {
   // Lance: concave arrowhead — sharp tip, swept-back barbs, notched tail where the jet burns.
   const L = r * 2.7, Wk = r * 1.15, bx = -L * .66, notch = -L * .22;
@@ -5959,6 +6028,16 @@ function draw(x) {
    x.fillStyle = c.gold; x.beginPath();
    x.moveTo(k.x, k.y - 7); x.lineTo(k.x + 6, k.y); x.lineTo(k.x, k.y + 7); x.lineTo(k.x - 6, k.y); x.fill();
   }
+ }
+ if (R.burnZ && R.burnZ.length) { // Pyromancer burning patches: flickering ember pool
+  x.save(); x.globalCompositeOperation = 'lighter';
+  for (const z of R.burnZ) {
+   const k = Math.min(1, z.l / (z.m * .4)), fl = .8 + .2 * Math.sin(R.t * 18 + z.seed), g = x.createRadialGradient(z.x, z.y, 2, z.x, z.y, z.r);
+   g.addColorStop(0, 'rgba(255,214,106,' + .5 * k * fl + ')'); g.addColorStop(.6, 'rgba(255,122,69,' + .32 * k + ')'); g.addColorStop(1, 'rgba(255,92,42,0)');
+   x.fillStyle = g; x.beginPath(); x.arc(z.x, z.y, z.r, 0, 7); x.fill();
+   x.globalAlpha = .7 * k; x.strokeStyle = '#ff7a45'; x.lineWidth = 1; x.setLineDash([4, 5]); x.beginPath(); x.arc(z.x, z.y, z.r * .92, R.t * .8 + z.seed, R.t * .8 + z.seed + 5); x.stroke(); x.setLineDash([]); x.globalAlpha = 1;
+  }
+  x.restore();
  }
  if (R.frost && R.frost.length) { // floor ice from the Cryogenic Stream: pale hex plates + frost cracks, fading out
   x.save();

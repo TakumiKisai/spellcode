@@ -3,7 +3,7 @@ import { ARENAS, EN, BOSSES, HOSTS, SPELLS, MODS } from './data.js';
 import { cl, ri, pick, okMod } from './helpers.js';
 import { snd } from './audio.js';
 import { drawThemed } from './themes.js';
-import { applyWand, bwCost, wandOf, wandBlockText } from './wands.js';
+import { applyWand, bwCost, wandOf, wandBlockText, FX_LABEL } from './wands.js';
 
 const dynamicWalls = new Map();
 export function setDynamicWalls(arena, walls) {
@@ -114,7 +114,7 @@ export function lineOf(c, ST) {
   [a.crit, 'always crits'],
   [a.pierce > (SPELLS[c.sp]?.pierce || 0) && a.k === 'proj', 'pierces'],
   [a.sh, '+' + a.sh + ' shield'],
-  [a.wandFx === 'cryo', 'cryogenic stream'],
+  [a.wandFx, FX_LABEL[a.wandFx]],
   [bwCost(a, ST) > 0, bwCost(a, ST) + ' BW/cast']
  ].filter(x => x[0]).map(x => x[1]);
 
