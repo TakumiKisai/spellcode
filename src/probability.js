@@ -81,18 +81,19 @@ function renderWandStorage(G) {
      <small>${w.d}</small>
      <div style="margin-top:auto;display:flex;gap:4px;padding-top:6px;border-top:1px dashed rgba(120,120,120,.3)">
        <button class="btn sm" data-wand-restore="${id}" style="padding:4px 6px;font-size:10px;flex:1" title="Return this wand to your collection (it is not auto-equipped)">⬆️ Restore</button>
+       <button class="btn sm g" data-wand-recycle="${id}" style="padding:4px 6px;font-size:10px;flex:1" title="Delete this wand and receive 1 random new wand">♻️ Recycle</button>
      </div>
    </div>`;
  }).join('');
  return `
   <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--mute)">
     <div style="color:var(--ink);font-size:11.5px;max-width:440px">
-      <b>${W.length} wand${W.length === 1 ? '' : 's'} in Storage.</b> Wands stored from your collection wait here. Restore returns a wand to your collection. Empty Bin permanently removes <u>only</u> stored wands; your recycled cards are never touched.
+      <b>${W.length} wand${W.length === 1 ? '' : 's'} in Storage.</b> Wands stored from your collection wait here. Restore returns a wand to your collection. Recycle deletes one stored wand for 1 random new wand. Empty Bin deletes <u>only</u> stored wands (+1 new random wand each, as available); your recycled cards are never touched.
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap">
       ${W.length ? (armed
-       ? `<button class="btn sm" data-act="wands-empty-confirm" style="background:#ff5c7a;color:#fff;font-weight:700;font-size:11px">Confirm: delete ${W.length} wand${W.length === 1 ? '' : 's'} forever</button><button class="btn sm g" data-act="wands-empty-cancel" style="font-size:11px">Cancel</button>`
-       : `<button class="btn sm g" data-act="wands-empty" style="font-size:11px">🗑️ Empty Bin (${W.length})</button>`) : ''}
+       ? `<button class="btn sm" data-act="wands-empty-confirm" style="background:#ff5c7a;color:#fff;font-weight:700;font-size:11px">Confirm: delete ${W.length} wand${W.length === 1 ? '' : 's'} → +${W.length} new</button><button class="btn sm g" data-act="wands-empty-cancel" style="font-size:11px">Cancel</button>`
+       : `<button class="btn sm g" data-act="wands-empty" style="font-size:11px">🗑️ Empty Bin (${W.length}) → +${W.length} New Wands</button>`) : ''}
     </div>
   </div>
   ${W.length === 0 ? '<div class="center" style="padding:32px;color:var(--mute)">No wands in Storage.<br>Store a spare wand from the equipment panel on the pipeline screen.</div>' : `

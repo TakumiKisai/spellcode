@@ -114,7 +114,7 @@ export function lineOf(c, ST) {
   [a.crit, 'always crits'],
   [a.pierce > (SPELLS[c.sp]?.pierce || 0) && a.k === 'proj', 'pierces'],
   [a.sh, '+' + a.sh + ' shield'],
-  [a.wandFx, FX_LABEL[a.wandFx]],
+  [a.wandFx, a.fxLabel || FX_LABEL[a.wandFx]],
   [bwCost(a, ST) > 0, bwCost(a, ST) + ' BW/cast']
  ].filter(x => x[0]).map(x => x[1]);
 

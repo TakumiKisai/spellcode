@@ -141,7 +141,8 @@ export const HOSTS = {
 export const DK = {
  slot:{n:'Extra Register',r:2,d:'+1 build slot (max 2)'},
  hand:{n:'Bigger Cache',r:1,d:'+1 hand size'},
- heal:{n:'Hotfix',r:0,d:'Restore 50% HP'}
+ heal:{n:'Hotfix',r:0,d:'Restore 50% HP'},
+ plating:{n:'Shield Plating',r:1,d:'+8 max shield, permanent (max 5 picks). Replaces the old shield() card.'}
 };
 
 export const WORLDS = {
