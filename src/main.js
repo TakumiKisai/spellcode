@@ -74,6 +74,7 @@ function pauseHTML() {
   <div class="set-sec">// pipeline (tap a card to remove it)</div>
   ${sbxMiniPipe()}
   <div class="set-row"><span>add card</span><span style="display:flex;gap:4px;align-items:center"><select id="sbx-card" class="sbx-sel">${sbxCardOpts()}</select><select id="sbx-ver" class="sbx-sel"><option value="1">v1</option><option value="2">v2</option><option value="3">v3</option></select><button class="btn g sm" data-pa="addcard">ADD</button></span></div>
+  <div class="set-row"><span>equip wand</span><span style="display:flex;gap:4px;align-items:center"><select id="sbx-wand" class="sbx-sel">${sbxWandOpts()}</select><button class="btn g sm" data-pa="addwand">EQUIP</button></span></div>
   <button class="btn g" data-pa="heal" style="width:100%;margin:4px 0">restore(hp, shield)</button>
   <button class="btn g" data-pa="skip" style="width:100%;margin:4px 0">skipRound()</button>` : ''}
   <button class="btn" data-pa="resume" style="width:100%;padding:10px;font-size:14px">RESUME (\`)</button>
@@ -147,6 +148,10 @@ function togglePause() {
    }
    uiSound('toggle'); renderPause(); return;
   }
+  if (a === 'addwand' && G.sandbox && R) { // grant + equip any wand mid-fight; compatibility is re-evaluated for every cast
+   if (sbxGiveWand($('#sbx-wand')?.value, true)) { sbxRebuild(); sfx('heal'); }
+   uiSound('toggle'); renderPause(); return;
+  }
   if (a === 'rmcard' && G.sandbox && R) { // remove a card from the pipeline (it stays in the deck)
    const i = +b; if (G.slots[i]) { G.slots.splice(i, 1); sbxRebuild(); sfx('heal'); }
    uiSound('toggle'); renderPause(); return;
@@ -195,6 +200,7 @@ function calcST() {
  s.slots += G.xs || 0;
  s.hand += G.xh || 0;
  for (const k in G.u) for (let i = 0; i < G.u[k]; i++) UPG[k]?.f?.(s);
+ s.shmax += G.shB || 0; // Shield Plating
  s.wand = WANDS[G.wand] ? G.wand : 'universal'; // equipped wand id, read by stats() in combat.js
  s.bwr = 1; s.bwcost = 1; s.bwmax = 1; // Bandwidth modifiers (passives may change these later; BWR itself stays hidden)
  ST = s;
@@ -274,7 +280,7 @@ function initializeRun(sandbox = false, startRound = 1, bossChoice = 'round') {
   last: [], modal: null, redrawUsed: 0, windows: defaultWindows(),
   sandbox, sandboxRound: sandbox ? startRound : null, sandboxBossChoice: bossChoice,
   sandboxImmortal: !!sandbox, sandboxMessage: '', bar: null,
-  wand: 'universal', wands: ['universal'], binWands: [], binTab: 'cards', binWandConfirm: 0, bw: 0, bwMax: 0, bwTrail: 0,
+  shB: 0, wand: 'universal', wands: ['universal'], binWands: [], binTab: 'cards', binWandConfirm: 0, bw: 0, bwMax: 0, bwTrail: 0,
   cycles: CYCLES.start, items: { restore: 0 }, layerRedraws: 0, rewardCtx: null, shop: null, mapMode: 0
  };
  calcST();
@@ -282,12 +288,13 @@ function initializeRun(sandbox = false, startRound = 1, bossChoice = 'round') {
  G.sh = ST.shmax;
  // UNO-style starting deck: populate from host.start
  HOSTS[G.host].start.split(' ').forEach(k => {
+  if (NO_CARD.has(k)) return; // shield() is now the Shield Plating reward, not a card
   const c = mk(k, 1);
   G.deck.push(c);
  });
  G.draw = shuffle([...G.deck]);
  if (!sandbox && !hostOpen(G.host)) G.host = 'debugger'; // sandbox may use any Host, locked or not
- if (sandbox) G.wands = Object.keys(WANDS); // sandbox is a test bed: every wand is available (no wand economy exists yet)
+ // sandbox starts with the Universal Wand like a normal run; spawn any wand with the SANDBOX // ADD WAND panel (or ADD ALL)
  initBW(true);
  G.round = sandbox ? cl(Math.floor(+startRound || 1), 1, PLAN.length) : 1;
  G.sector = sandbox ? Math.ceil(G.round / 5) : 1;
@@ -584,7 +591,7 @@ function rollRarity() {
 function rollRewards(cat) {
  const n = G.cfg.rmode === 'h' ? 2 : 3, bonus = (G.cfg.rmode === 'o' ? 1 : 0) + (G.rb || 0);
  if (cat === 'd') {
-  const out = shuffle(Object.keys(DK).filter(k => k !== 'slot' || (G.xs || 0) < 2)).slice(0, n).map(k => ({ t: 'd', k }));
+  const out = shuffle(Object.keys(DK).filter(k => (k !== 'slot' || (G.xs || 0) < 2) && (k !== 'plating' || (G.shB || 0) < PLATING.cap))).slice(0, n).map(k => ({ t: 'd', k }));
   const w = Math.random() < WAND_ACQ.deck ? wandOffer() : null; if (w) out.push({ t: 'w', k: w }); // Deck & Hand reward: sometimes also a wand
   return out;
  }
@@ -604,7 +611,7 @@ function rollRewards(cat) {
  for (let j = 0; j < n; j++) {
   let r = Math.min(legOK() ? 4 : epicOK() ? 3 : 2, rollRarity() + (j === 0 ? bonus : 0)), it = null;
   for (; r >= 0 && !it; r--) {
-   const pool = [...Object.keys(SPELLS), ...Object.keys(MODS)].filter(k => defOf(k).r === r);
+   const pool = [...Object.keys(SPELLS), ...Object.keys(MODS)].filter(k => !NO_CARD.has(k) && defOf(k).r === r);
    const f = pool.filter(k => !out.some(o => o.k === k));
    if (f.length) it = { t: 'c', k: pick(f) };
   }
@@ -616,7 +623,7 @@ function rollRewards(cat) {
 export function rollFreshCard() {
  const maxR = Math.min(legOK() ? 4 : epicOK() ? 3 : 2, rollRarity());
  for (let r = maxR; r >= 0; r--) {
-  const pool = [...Object.keys(SPELLS), ...Object.keys(MODS)].filter(k => defOf(k).r === r);
+  const pool = [...Object.keys(SPELLS), ...Object.keys(MODS)].filter(k => !NO_CARD.has(k) && defOf(k).r === r);
   if (pool.length) return mk(pick(pool), 1);
  }
  return mk('for', 1);
@@ -654,6 +661,7 @@ function takeReward(o) {
   G.u[o.k] = hu(o.k) + 1;
  } else if (o.k === 'slot') G.xs = (G.xs || 0) + 1;
  else if (o.k === 'hand') G.xh = (G.xh || 0) + 1;
+ else if (o.k === 'plating') { G.shB = Math.min(PLATING.cap, (G.shB || 0) + PLATING.amt); calcST(); G.sh = Math.min(ST.shmax, (G.sh != null ? G.sh : 0) + PLATING.amt); }
  else G.hp = Math.min(G.max, G.hp + G.max * .5);
  calcST();
  uiSound('reward');
@@ -1408,6 +1416,15 @@ function drawChest(x, a, spent, kind, t) {
  }
  x.restore();
 }
+function snowflake(x, cx, cy, r, rot) { // six-armed crystal with side branches
+ x.beginPath();
+ for (let i = 0; i < 6; i++) {
+  const an = rot + i * Math.PI / 3, ca = Math.cos(an), sa = Math.sin(an), bx = cx + ca * r * .55, by = cy + sa * r * .55;
+  x.moveTo(cx, cy); x.lineTo(cx + ca * r, cy + sa * r);
+  for (const sg of [-1, 1]) { const bn = an + sg * .75; x.moveTo(bx, by); x.lineTo(bx + Math.cos(bn) * r * .34, by + Math.sin(bn) * r * .34); }
+ }
+ x.stroke();
+}
 function drawRoomLayer(x) {
  const room = R.room, M = roomMap(), rm = M.rooms[room.id], t = R.t, T = room.T;
  drawWallsAndDoors(x, room, M, rm, t);
@@ -1508,7 +1525,7 @@ function drawRoomHud(x) {
 
 // ---- Cycle Shop (Undertale-style menu: merchant portrait, typewriter dialogue, BUY / SLOTS / LEAVE) ----
 function buildShopStock() {
- const pool = [...Object.keys(SPELLS), ...Object.keys(MODS)].filter(k => defOf(k).r <= SHOP.cardMaxRarity);
+ const pool = [...Object.keys(SPELLS), ...Object.keys(MODS)].filter(k => !NO_CARD.has(k) && defOf(k).r <= SHOP.cardMaxRarity);
  const cards = shuffle(pool).slice(0, SHOP.cardCount).map(k => ({ k, price: SHOP.cardPrice[defOf(k).r] ?? 10, sold: false }));
  if (Math.random() < SHOP.saleChance && cards.length) { const c = cards[ri(cards.length)]; c.price = Math.max(1, Math.round(c.price / 2)); c.sale = true; }
  return { cards, passives: rollShopPassives(), restore: SHOP.restore.stock, rerolls: 0, crates: 0 };
@@ -1616,7 +1633,7 @@ function shopClick(e) {
   if (G.cycles >= cost) {
    G.cycles -= cost; let r = SHOP.crate.odds[SHOP.crate.odds.length - 1][1], roll = Math.random(), acc = 0;
    for (const [p, rr] of SHOP.crate.odds) { acc += p; if (roll < acc) { r = rr; break; } }
-   let pool = []; for (let q = r; q >= 0 && !pool.length; q--) pool = [...Object.keys(SPELLS), ...Object.keys(MODS)].filter(kk => defOf(kk).r === q);
+   let pool = []; for (let q = r; q >= 0 && !pool.length; q--) pool = [...Object.keys(SPELLS), ...Object.keys(MODS)].filter(kk => !NO_CARD.has(kk) && defOf(kk).r === q);
    const nc = mk(pick(pool)); G.deck.push(nc); G.disc.push(nc); calcST(); ok = true; shopSay(`THE CRATE HISSES. ${defOf(nc.k).n} (${RAR[defOf(nc.k).r]}) ADDED TO YOUR DECK.`); uiSound('reward'); shopRender(); return;
   }
  }
@@ -1830,6 +1847,8 @@ function equipWand(id) {
  G.wand = id; calcST(); return true;
 }
 // ---- Wand collection (G.wands) and Storage (G.binWands) are separate lists; a wand is only ever in one of them. ----
+const NO_CARD = new Set(['shield']); // cards that are no longer drawn/rewarded as cards
+const PLATING = { amt: 8, cap: 40 };    // Shield Plating (Deck & Hand reward): flat permanent max shield
 const wandName = id => wandOf(id).n;
 function wandOffer() { const a = wandsOffered(G.wands, G.binWands); return a.length ? pick(a) : null; } // never offers a wand that is owned or in Storage
 function acquireWand(id) {
@@ -1839,6 +1858,13 @@ function acquireWand(id) {
 function storeWand(id) {
  if (!canStoreWand(id, G.wand, G.wands)) return false; // Universal and the equipped wand can never be stored: a valid equipped wand always exists
  G.wands.splice(G.wands.indexOf(id), 1); (G.binWands ||= []).push(id); G.binWandConfirm = 0; return true;
+}
+// Recycle (Wands tab): like the Cards tab, deleting stored wands pays out new ones. 1 deleted wand -> 1 random wand you do not own and do not have stored.
+function recycleWands(ids) {
+ const del = ids.filter(id => (G.binWands || []).includes(id)); G.binWands = (G.binWands || []).filter(id => !del.includes(id));
+ const pool = wandsOffered(G.wands, G.binWands).filter(id => !del.includes(id)), got = [];
+ while (got.length < del.length && pool.length) got.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+ got.forEach(id => G.wands.push(id)); G.binWandConfirm = 0; return { deleted: del.length, got };
 }
 function restoreWand(id) {
  const i = (G.binWands || []).indexOf(id); if (i < 0 || G.wands.includes(id)) return false;
@@ -1919,22 +1945,35 @@ function fire(c) {
  sfx('cast_' + a.k, { x: p.x });
  if (a.sh) gainSh(a.sh);
 
- if (a.k === 'proj') {
+ if (a.k === 'proj' || a.swarmN || a.lob) {
   const a0 = aimAngle();
-  if (a.wandFx === 'swarm') { // Swarm Wand: one bolt becomes a fan of small homing drones (count x map() spread), each weak and non-piercing
+  if (a.swarmN) { // Swarm Wand (any card it transforms): one bolt becomes a fan of small homing drones (count x map() spread), each weak and non-piercing
    const n = a.swarmN * Math.max(1, a.pc);
    for (let i = 0; i < n; i++) {
     const an = a0 + (n > 1 ? (i / (n - 1) - .5) * 1.1 : 0) + (Math.random() - .5) * .25, sp = a.sp * (.85 + Math.random() * .3);
     R.pr.push({ x: p.x, y: p.y, vx: Math.cos(an) * sp, vy: Math.sin(an) * sp, a, shape: 'drone', life: 2.8, hit: new Set(), pierce: 0, bounce: a.bounce, r: Math.min(a.rad * a.size, 8) });
    }
+  } else if (a.lob) { // Demolitionist mortar: flies over bugs to a fixed range, then detonates
+   R.pr.push({ x: p.x, y: p.y, vx: Math.cos(a0) * a.sp, vy: Math.sin(a0) * a.sp, a, shape: 'napalm', life: 3, hit: new Set(), pierce: 0, bounce: 0, r: 6, lob: a.lob * a.area });
   } else for (let i = 0; i < a.pc; i++) {
    const an = a0 + (a.pc > 1 ? (i - (a.pc - 1) / 2) * .3 : 0);
    R.pr.push({ x: p.x, y: p.y, vx: Math.cos(an) * a.sp, vy: Math.sin(an) * a.sp, a, shape: a.wandFx === 'pyro' ? 'napalm' : c.c.sp, life: 2.2, hit: new Set(), pierce: a.pierce, bounce: a.bounce, r: Math.min(a.rad * a.size, 16) });
   }
+ } else if (a.k === 'nova' && a.ringMines) { // Demolitionist: nova becomes a ring of mines around you
+  if (R.tg.filter(t => t.mine && t.own === 'p').length + a.ringMines > 6) return false;
+  const off = aimAngle();
+  for (let i = 0; i < a.ringMines; i++) {
+   const an = off + i * Math.PI * 2 / a.ringMines; let nx = p.x + Math.cos(an) * 58, ny = p.y + Math.sin(an) * 58;
+   if (wallHit(G.cfg.arena, nx, ny, 8)) { nx = p.x + Math.cos(an) * 28; ny = p.y + Math.sin(an) * 28; }
+   R.tg.push({ mine: 1, x: nx, y: ny, r: a.mineR * a.area, t: .9 + i * .14, max: .9 + i * .14, dmg: a.dmg, own: 'p', c: a.col, a }); ring(nx, ny, 10, a.col, .2);
+  }
  } else if (a.k === 'nova') {
   const nr = a.rad * a.area;
+  if (a.cascade) { for (const f of [.45, .75, 1]) { R.fx.push({ nova: 1, x: p.x, y: p.y, r: 0, max: nr * f, l: .34, d: .34, c: a.col }); blast(p.x, p.y, nr * f, a.dmg, a, null, 0, 1); } } // Pulse Cascade: the core is hit by all three rings
+  else {
   R.fx.push({ nova: 1, x: p.x, y: p.y, r: 0, max: nr, l: .34, d: .34, c: a.col });
   blast(p.x, p.y, nr, a.dmg, a, null, 0, 1);
+  }
  } else if (a.k === 'chain' && a.wandFx === 'storm') {
   stormChain(a);
  } else if (a.k === 'chain') {
@@ -2005,6 +2044,7 @@ function fire(c) {
     hitE(e, a.dmg, a, p, undefined, rail ? 1 + a.railRamp * tg.indexOf(e) : 1); // rail: +30% damage for every bug already pierced
    }
    if (rail && tg.length >= 2) txt(hx, hy - 16, 'x' + tg.length + ' RAIL', '#d9c2ff', 11);
+   if (a.pull && tg.length) pullTo(p.x, p.y, 280, [170, 250, 340][a.pull - 1] || 340); // Lancer skewer: drag everything hit back toward you
   }
  } else if (a.k === 'melee') {
   const a0 = aimAngle(), rg = 66 * a.area;
@@ -2049,6 +2089,33 @@ function fire(c) {
  }
 }
 
+// ---- Generic wand on-hit effects. Applied from hitE, so every attack kind (projectile, beam, chain, nova, mine blast) can carry them. ----
+function addBurnZone(x, y, ba, d, P) {
+ R.burnZ ||= [];
+ const ex = R.burnZ.find(z => Math.hypot(z.x - x, z.y - y) < z.r * .6); if (ex) { ex.l = Math.max(ex.l, P.life * .8); return; }
+ if (R.burnZ.length >= P.max) R.burnZ.shift();
+ R.burnZ.push({ x, y, r: P.r, l: P.life, m: P.life, t: 0, tick: P.tick, a: { ...ba, burn: 1, dmg: d * P.dmgMul }, seed: Math.random() * 9 });
+}
+function addFrostZone(x, y) {
+ const F = CRYO.frost; R.frost ||= [];
+ const ex = R.frost.find(q => Math.hypot(q.x - x, q.y - y) < F.r * .7); if (ex) { ex.l = Math.max(ex.l, F.life * .85); return; }
+ if (R.frost.length < F.max) R.frost.push({ x, y, r: F.r * (.9 + Math.random() * .4), l: F.life, m: F.life, seed: Math.random() * 9 });
+}
+function wandOnHit(e, a, d) {
+ const base = { ...a, xArc: null, xBurnZ: null, xFrostZ: null, xPulse: null, crit: 0, knock: 0 };
+ if (a.xArc) {
+  const X = a.xArc, kids = R.en.filter(o => !o.dead && o !== e && Math.hypot(o.x - e.x, o.y - e.y) < X.reach).sort((o1, o2) => Math.hypot(o1.x - e.x, o1.y - e.y) - Math.hypot(o2.x - e.x, o2.y - e.y)).slice(0, X.n);
+  for (const o of kids) { R.lines.push({ x1: e.x, y1: e.y, x2: o.x, y2: o.y, l: .16, c: a.col, lightning: 1, seed: Math.random(), w: 1.8 }); hitE(o, d * X.frac, base, e); }
+ }
+ if (a.xBurnZ) addBurnZone(e.x, e.y, base, d, a.xBurnZ);
+ if (a.xFrostZ) addFrostZone(e.x, e.y);
+ if (a.xPulse) { ring(e.x, e.y, a.xPulse.r, a.col, .2); blast(e.x, e.y, a.xPulse.r, d * a.xPulse.frac, base, e, 0, 0); }
+}
+function mortarBoom(q) {
+ const a = q.a, r = a.lobR * a.area;
+ R.fx.push({ nova: 1, x: q.x, y: q.y, r: 0, max: r, l: .3, d: .3, c: a.col }); R.shake = Math.max(R.shake, 5); burst(q.x, q.y, a.col, 10, 150);
+ blast(q.x, q.y, r, a.dmg * a.lobMul, { ...a, crit: 0 }, null, 0, 1);
+}
 // ---- Stormcaller Wand: chain() becomes a BRANCHING lightning tree (each struck bug forks to nearby bugs). Reuses hitE / lightning lines / slow status. ----
 function stormChain(a) {
  const p = R.p, first = aimTarget(a.rad * a.area); if (!first) return;
@@ -2090,7 +2157,9 @@ function cryoStream(a, c) {
  const maxL = a.cryoLen * a.area * (1 + .2 * mapStep), half = a.cryoHalf + .03 * mapStep;
  let L = 0; const ca = Math.cos(a0), sa = Math.sin(a0);
  while (L < maxL && !wallHit(G.cfg.arena, p.x + ca * (L + 6), p.y + sa * (L + 6), 2)) L += 6; // the stream stops at walls
- R.fx.push({ x: p.x, y: p.y, r: 0, max: L, l: .22, d: .22, c: a.col, cryo: 1, a: a0, h: half, seed: Math.random() * 9 });
+ R.fx.push({ x: p.x, y: p.y, r: 0, max: L, l: .22, d: .22, c: STDOUT_PAL[3].fx, tier: 3, cone: 1, stdout: 1, a: a0, h: half }); // looks like stdout(), but icy
+ R.snow ||= [];
+ for (let i = [2, 4, 7][SET.q]; i-- > 0;) { if (R.snow.length > 70) break; const d = 24 + Math.random() * Math.max(10, L - 24), w = (Math.random() - .5) * half * 1.8; R.snow.push({ x: p.x + Math.cos(a0 + w) * d, y: p.y + Math.sin(a0 + w) * d, vx: Math.cos(a0) * 22 + (Math.random() - .5) * 30, vy: Math.sin(a0) * 22 + (Math.random() - .5) * 30 + 8, l: 1.3 + Math.random() * .5, m: 1.6, rot: Math.random() * 6.3, vr: (Math.random() - .5) * 2.2, s: 3.5 + Math.random() * 4.5 }); } // snowflake shards
  for (const e of R.en) {
   if (e.dead) continue;
   const dx = e.x - p.x, dy = e.y - p.y, dist = Math.hypot(dx, dy);
@@ -2106,9 +2175,9 @@ function cryoStream(a, c) {
   if (ex) { ex.l = Math.max(ex.l, F.life * .85); continue; }
   if (R.frost.length < F.max) R.frost.push({ x: fx, y: fy, r: F.r * (.8 + Math.random() * .5), l: F.life, m: F.life, seed: Math.random() * 9 });
  }
- for (let i = [2, 4, 7][SET.q]; i-- > 0;) { const d = Math.random() * L, w = (Math.random() - .5) * half * 1.6; part(p.x + Math.cos(a0 + w) * d, p.y + Math.sin(a0 + w) * d, Math.cos(a0) * 40, Math.sin(a0) * 40 - 20, .4, Math.random() < .5 ? '#7ee8ff' : '#e6fbff', 2 + Math.random() * 2, 1); }
 }
 function updFrost(dt) {
+ if (R.snow && R.snow.length) { for (const f of R.snow) { f.l -= dt; f.x += f.vx * dt; f.y += f.vy * dt; f.vx *= 1 - 1.5 * dt; f.vy *= 1 - 1.5 * dt; f.rot += f.vr * dt; } R.snow = R.snow.filter(f => f.l > 0); }
  if (!R.frost || !R.frost.length) return;
  const F = CRYO.frost;
  for (const q of R.frost) q.l -= dt;
@@ -2299,6 +2368,7 @@ function hitE(e, d, a, src, np, damageScale = 1) {
  if (R.sandbox && R.sbOneHit) d *= 100;
  if (e.dead) return;
  if (e.inv > 0) { txt(e.x, e.y - e.r, 'IMMUNE', '#aab4c8', 10); return; }
+ if (a.xArc || a.xBurnZ || a.xFrostZ || a.xPulse) wandOnHit(e, a, d); // wand on-hit effects (arc / burn patch / ice / pulse); the follow-up hits carry no effect flags, so nothing recurses
  const sc = a.crit >= 1, crit = sc || Math.random() < ST.crit;
  let v = d * (crit ? (sc ? 1 + a.crit : 2) : 1) * e.prot * (e.vuln > 0 ? 1.5 : 1);
  const overloadState = e.boss && e.bd0?.n === 'SEGMENT FAULT' ? R.seg?.overload?.state : null;
@@ -2588,6 +2658,12 @@ function sbxMiniPipe() { // pause menu: your current pipeline as chips (tap one 
  const chips = G.slots.map((c, i) => `<button class="btn g sm" data-pa="rmcard:${i}" title="remove" style="margin:2px">${nm(c)} v${c.v || 1} \u2715</button>`).join('') || '<span class="lbl">// empty pipeline</span>';
  const cp = compilePipeline(G.slots, ST);
  return `<div style="display:flex;flex-wrap:wrap;gap:2px;margin:4px 0">${chips}</div><pre style="font-size:10px;margin:4px 0;white-space:pre-wrap">${cp.out.map(c => lineOf(c, ST)).join('\n') || '// nothing compiles yet'}</pre>`;
+}
+const sbxWandOpts = () => Object.keys(WANDS).map(id => `<option value="${id}"${G.sbxWand === id ? ' selected' : ''}>${WANDS[id].n}${(G.wands || []).includes(id) ? ' \u2713' : ''}</option>`).join('');
+function sbxGiveWand(id, equip) { // sandbox: put any wand in the collection (out of Storage if needed) and optionally equip it
+ if (!WANDS[id]) return false;
+ G.sbxWand = id; G.binWands = (G.binWands || []).filter(x => x !== id); if (!G.wands.includes(id)) G.wands.push(id);
+ if (equip) { G.wand = id; calcST(); } return true;
 }
 function sbxCardOpts() { // sandbox: every spell and modifier, for the add_card() cheat
  const opt = (k, o) => `<option value="${k}"${G.sbxCard === k ? ' selected' : ''}>${o.n}</option>`;
@@ -4481,6 +4557,11 @@ function updPr(dt) {
  const arena = G.cfg.arena;
  for (const q of R.pr) {
   const a = q.a;
+  if (q.lob != null) { // mortar shell: ignores bugs, detonates at its range or on a wall
+   q.x += q.vx * dt; q.y += q.vy * dt; q.lob -= Math.hypot(q.vx, q.vy) * dt;
+   if (q.lob <= 0 || wallHit(arena, q.x, q.y, 3)) { mortarBoom(q); q.life = 0; }
+   continue;
+  }
   if (a.home && !q.noHome && R.leak) { // Shards jam homing shots that get close
    for (const u of R.en) if (u.army === 'shard' && !u.dead && Math.hypot(u.x - q.x, u.y - q.y) < 52) { q.noHome = 1; burst(q.x, q.y, '#5fe0a0', 4, 90); if (!q.jt) { q.jt = 1; if (Math.random() < .35) txt(q.x, q.y - 8, 'JAMMED', '#5fe0a0', 9); } break; }
   }
@@ -4639,7 +4720,8 @@ function finish(m) {
 const STDOUT_PAL = [
  { fx: '#ff7a45', fill: '#ff5a3c', core: ['255,255,240', '255,200,90', '255,90,30'], tg: ['255,248,215', '255,205,90', '255,110,40', '200,40,20'], sp: ['255,225,130', '255,90,30'], hot: '#ffd9a0' },
  { fx: '#5aa8ff', fill: '#3c78ff', core: ['240,250,255', '150,215,255', '50,110,255'], tg: ['235,248,255', '140,210,255', '60,120,255', '30,40,200'], sp: ['190,235,255', '60,120,255'], hot: '#cfe8ff' },
- { fx: '#b36bff', fill: '#9a4bff', core: ['252,240,255', '220,160,255', '140,60,255'], tg: ['250,235,255', '215,150,255', '150,70,255', '80,20,170'], sp: ['235,190,255', '150,70,255'], hot: '#ecd2ff' }
+ { fx: '#b36bff', fill: '#9a4bff', core: ['252,240,255', '220,160,255', '140,60,255'], tg: ['250,235,255', '215,150,255', '150,70,255', '80,20,170'], sp: ['235,190,255', '150,70,255'], hot: '#ecd2ff' },
+ { fx: '#7ee8ff', fill: '#aeeaff', core: ['245,253,255', '150,230,255', '70,140,255'], tg: ['255,255,255', '175,242,255', '95,195,255', '50,120,255'], sp: ['235,252,255', '90,190,255'], hot: '#e6fbff' } // [3] Cryogenic Stream: same flame-jet renderer as stdout(), icy white -> cyan -> deep blue
 ];
 function lightenHex(c, t = .5) {
  const m = /^#([0-9a-f]{6})$/i.exec(c || '');
@@ -6029,6 +6111,11 @@ function draw(x) {
    x.moveTo(k.x, k.y - 7); x.lineTo(k.x + 6, k.y); x.lineTo(k.x, k.y + 7); x.lineTo(k.x - 6, k.y); x.fill();
   }
  }
+ if (R.snow && R.snow.length) { // drifting snowflake shards thrown off by the Cryogenic Stream
+  x.save(); x.strokeStyle = '#e6fbff'; x.lineWidth = 1;
+  for (const f of R.snow) { x.globalAlpha = Math.min(1, f.l / .6) * .9; snowflake(x, f.x, f.y, f.s, f.rot); }
+  x.restore();
+ }
  if (R.burnZ && R.burnZ.length) { // Pyromancer burning patches: flickering ember pool
   x.save(); x.globalCompositeOperation = 'lighter';
   for (const z of R.burnZ) {
@@ -6042,12 +6129,12 @@ function draw(x) {
  if (R.frost && R.frost.length) { // floor ice from the Cryogenic Stream: pale hex plates + frost cracks, fading out
   x.save();
   for (const q of R.frost) {
-   const k = Math.min(1, q.l / (q.m * .5)), r = q.r;
-   x.globalAlpha = .38 * k; x.fillStyle = '#9fefff'; x.beginPath();
-   for (let i = 0; i < 6; i++) { const an = i * Math.PI / 3 + q.seed; x.lineTo(q.x + Math.cos(an) * r, q.y + Math.sin(an) * r); }
-   x.closePath(); x.fill();
-   x.globalAlpha = .75 * k; x.strokeStyle = '#e6fbff'; x.lineWidth = 1; x.stroke();
-   x.beginPath(); for (let i = 0; i < 3; i++) { const an = i * Math.PI / 3 + q.seed; x.moveTo(q.x - Math.cos(an) * r * .7, q.y - Math.sin(an) * r * .7); x.lineTo(q.x + Math.cos(an) * r * .7, q.y + Math.sin(an) * r * .7); } x.stroke();
+   const k = Math.min(1, q.l / (q.m * .5)), r = q.r * 1.15;
+   const g = x.createRadialGradient(q.x, q.y, 1, q.x, q.y, r);
+   g.addColorStop(0, 'rgba(190,244,255,' + .3 * k + ')'); g.addColorStop(1, 'rgba(126,232,255,0)');
+   x.globalAlpha = 1; x.fillStyle = g; x.beginPath(); x.arc(q.x, q.y, r, 0, 7); x.fill();
+   x.strokeStyle = '#e6fbff'; x.lineWidth = 1.2; x.globalAlpha = .85 * k; snowflake(x, q.x, q.y, r * .9, q.seed);
+   x.globalAlpha = .55 * k; x.strokeStyle = '#9fefff'; snowflake(x, q.x, q.y, r * .42, q.seed + .52);
   }
   x.restore();
  }
@@ -6151,21 +6238,6 @@ function draw(x) {
    spike(R0, R0 * .42, 0); x.fill(); x.stroke();
    x.fillStyle = shadeHex(f.c, .55);
    spike(R0 * .6, R0 * .3, .2); x.fill();
-   x.restore(); continue;
-  }
-  if (f.cryo) { // Cryogenic Stream: a narrow lattice beam of ice shards with binary-code sparks
-   const k = f.l / f.d, L = Math.max(10, f.max), q = SET.fl, GK = GLOW[SET.gw];
-   x.save(); x.translate(f.x, f.y); x.rotate(f.a);
-   if (GK > 0) { x.globalCompositeOperation = 'lighter'; const g = x.createLinearGradient(0, 0, L, 0); g.addColorStop(0, 'rgba(126,232,255,' + k * .55 * GK + ')'); g.addColorStop(1, 'rgba(126,232,255,0)'); x.fillStyle = g; x.beginPath(); x.moveTo(0, 0); x.lineTo(L, -L * Math.tan(f.h)); x.lineTo(L, L * Math.tan(f.h)); x.closePath(); x.fill(); }
-   x.globalCompositeOperation = 'source-over';
-   const n = [5, 9, 14][q];
-   for (let i = 0; i < n; i++) { // ice shards strewn along the stream
-    const u = (i + .5) / n, d = L * u, w = (Math.sin(f.seed + i * 7.1) * .5) * Math.tan(f.h) * d * 1.5, sz = 4 + 4 * (1 - u);
-    x.globalAlpha = k * (.9 - u * .4); x.fillStyle = i % 2 ? '#e6fbff' : '#7ee8ff';
-    x.beginPath(); x.moveTo(d + sz, w); x.lineTo(d, w - sz * .45); x.lineTo(d - sz * .8, w); x.lineTo(d, w + sz * .45); x.closePath(); x.fill();
-   }
-   x.globalAlpha = k * .9; x.strokeStyle = '#e6fbff'; x.lineWidth = 2; x.beginPath(); x.moveTo(8, 0); x.lineTo(L, 0); x.stroke();
-   if (q > 0) { x.font = "700 8px 'JetBrains Mono',monospace"; x.fillStyle = '#bff6ff'; for (let i = 0; i < [0, 5, 9][q]; i++) { const u = ((i * .37 + f.seed) % 1), d = 14 + (L - 14) * u; x.globalAlpha = k * .8; x.fillText((i + (f.seed | 0)) % 2 ? '1' : '0', d, Math.sin(i * 5.3 + f.seed) * Math.tan(f.h) * d); } }
    x.restore(); continue;
   }
   if (f.cone) {
@@ -7353,7 +7425,7 @@ export function render() {
 
   <p class="lbl">Pipeline (modifiers affect the spell to their right). Tap a card to select it, tap another to move it to that spot, or an empty slot to move it to the end. Double-tap to remove. Cards with a bar underneath were used last round, so they go to the Storage.</p>
   <div class="grid">${sl}</div>
-  ${G.sandbox ? `<div class="panel" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><b style="color:var(--mult)">SANDBOX // ADD CARD</b><select id="sbx-card" class="sbx-sel">${sbxCardOpts()}</select><select id="sbx-ver" class="sbx-sel"><option value="1">v1</option><option value="2">v2</option><option value="3">v3</option></select><button class="btn g sm" data-act="sbx-add">ADD TO PIPELINE</button><button class="btn g sm" data-act="sbx-add-hand">ADD TO HAND</button></div>` : ''}
+  ${G.sandbox ? `<div class="panel" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><b style="color:var(--mult)">SANDBOX // ADD CARD</b><select id="sbx-card" class="sbx-sel">${sbxCardOpts()}</select><select id="sbx-ver" class="sbx-sel"><option value="1">v1</option><option value="2">v2</option><option value="3">v3</option></select><button class="btn g sm" data-act="sbx-add">ADD TO PIPELINE</button><button class="btn g sm" data-act="sbx-add-hand">ADD TO HAND</button></div><div class="panel" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><b style="color:var(--mult)">SANDBOX // ADD WAND</b><select id="sbx-wand" class="sbx-sel">${sbxWandOpts()}</select><button class="btn g sm" data-act="sbx-wand-add">ADD</button><button class="btn g sm" data-act="sbx-wand-equip">ADD &amp; EQUIP</button><button class="btn g sm" data-act="sbx-wand-all">ADD ALL</button></div>` : ''}
 
   <div class="panel"><b>WAND</b> <span class="lbl">equipment // ${(G.wands || []).length} owned</span>
    <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:6px;align-items:stretch">${(G.wands || ['universal']).map(id => { const w = wandOf(id), eq = G.wand === id, st = canStoreWand(id, G.wand, G.wands || []); return `<div class="card" style="cursor:default;min-width:150px;max-width:210px;border-top-color:${w.col};${eq ? 'outline:2px solid ' + w.col + ';' : ''}"><div style="height:44px;text-align:center;padding-top:6px">${wandIconHTML(id, 3, -35)}</div><em style="color:${w.col}">${eq ? 'EQUIPPED' : 'WAND'}</em><b>${w.n}</b><small>${w.d}</small><div style="margin-top:auto;display:flex;gap:4px;padding-top:6px"><button class="btn sm ${eq ? '' : 'g'}" data-act="wand-equip" data-wand="${id}" style="flex:1;font-size:10px;padding:4px 6px" ${eq ? 'disabled' : ''}>${eq ? 'Equipped' : 'Equip'}</button>${id === 'universal' ? '' : `<button class="btn sm g" data-act="wand-store" data-wand="${id}" style="flex:1;font-size:10px;padding:4px 6px" ${st ? '' : 'disabled'} title="${eq ? 'Equip another wand first' : 'Move to Storage (Wands tab)'}">Store</button>`}</div></div>`; }).join('')}</div>
@@ -7402,6 +7474,12 @@ $('#app').addEventListener('click', e => {
 
  const binTabBtn = e.target.closest('[data-bin-tab]');
  if (binTabBtn) { G.binTab = binTabBtn.dataset.binTab === 'wands' ? 'wands' : 'cards'; G.binWandConfirm = 0; uiSound('select'); render(); return; }
+ const wandRecycleBtn = e.target.closest('[data-wand-recycle]');
+ if (wandRecycleBtn) { // Recycle ONE stored wand into a new random wand. Cards are never touched.
+  const id = wandRecycleBtn.dataset.wandRecycle;
+  if (!wandsOffered(G.wands, (G.binWands || []).filter(x => x !== id)).filter(x => x !== id).length) { G.msg = 'No new wand available to recycle into.'; uiSound('deny'); render(); return; }
+  const r = recycleWands([id]); G.msg = r.got.length ? `Recycled into ${wandName(r.got[0])}.` : 'Nothing to recycle into.'; uiSound('reward'); render(); return;
+ }
  const wandRestoreBtn = e.target.closest('[data-wand-restore]');
  if (wandRestoreBtn) { // Wands tab: restores ONLY a wand (G.binWands -> G.wands). Cards are not touched.
   const id = wandRestoreBtn.dataset.wandRestore;
@@ -7508,8 +7586,8 @@ $('#app').addEventListener('click', e => {
  if (d.act === 'wands-empty') { if ((G.binWands || []).length) { G.binWandConfirm = 1; uiSound('select'); } render(); return; } // first click only arms the confirmation
  if (d.act === 'wands-empty-cancel') { G.binWandConfirm = 0; render(); return; }
  if (d.act === 'wands-empty-confirm') { // permanently removes ONLY the stored wands; G.disc / G.deck are never touched
-  const n = (G.binWands || []).length; G.binWands = []; G.binWandConfirm = 0;
-  G.msg = n ? `${n} stored wand${n > 1 ? 's' : ''} permanently deleted.` : ''; uiSound('back'); render(); return;
+  const r = recycleWands([...(G.binWands || [])]); // permanently deletes ONLY stored wands; G.disc / G.deck are never touched
+  G.msg = r.deleted ? `${r.deleted} stored wand${r.deleted > 1 ? 's' : ''} deleted` + (r.got.length ? ` -> ${r.got.map(wandName).join(', ')} added to your collection.` : '.') : ''; uiSound('back'); render(); return;
  }
  if (d.act === 'bin-recycle-3') {
   if (G.disc.length < 3) {
@@ -7606,6 +7684,11 @@ $('#app').addEventListener('click', e => {
   if (G.cfg && G.cfg.boss) {
    beginBossLoad(G.cfg.boss, () => fight());
   } else fight();
+ } else if ((d.act === 'sbx-wand-add' || d.act === 'sbx-wand-equip') && G.sandbox) {
+  if (sbxGiveWand($('#sbx-wand')?.value, d.act === 'sbx-wand-equip')) sfx('heal');
+  render();
+ } else if (d.act === 'sbx-wand-all' && G.sandbox) {
+  Object.keys(WANDS).forEach(id => sbxGiveWand(id, false)); sfx('heal'); render();
  } else if ((d.act === 'sbx-add' || d.act === 'sbx-add-hand') && G.sandbox) {
   const k = $('#sbx-card')?.value, v = +($('#sbx-ver')?.value || 1);
   if (k && (SPELLS[k] || MODS[k])) { G.sbxCard = k; const c = mk(k, v); G.deck.push(c); if (d.act === 'sbx-add' && G.slots.length < nSlots()) G.slots.push(c); else G.hand.push(c); sfx('heal'); }
