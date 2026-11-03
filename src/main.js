@@ -2,7 +2,7 @@ import { W, H, GW, GH, PLAN, CHAOS, setArenaSize } from './constants.js';
 import { RAR, RC, SPELLS, MODS, UPG, HOSTS, DK, WORLDS, EN, ARENAS, BOSSES, RACE, LEAK, SEGFAULT, PLAYER_SHIELD } from './data.js';
 import { ROOM_TYPES, CYCLES, SHOP, SLOTS, redrawCost, slotHandTable, slotRTP, spinSlots, buildLayerMap, buildBossMap, ENTRY_SPOT, DIR_OPP } from './rooms.js';
 import { WANDS, wandOf, wandAccepts, bwCost, bwMaxFor, bwRegen, clampBW, CRYO, STORM, WAND_ACQ, wandsOffered, canStoreWand } from './wands.js';
-import { wandIconHTML, wandCanvas } from './wandart.js';
+import { wandIconHTML, wandCanvas, wandCompatHTML } from './wandart.js';
 import { $, ri, pick, cl, shuffle, css, mk, defOf, isMod, maxV, okMod, wo, xText, xl, cardH } from './helpers.js';
 import { renderOSWindows } from './probability.js';
 import { drawNodes } from './themes.js';
@@ -1872,7 +1872,7 @@ function restoreWand(id) {
 }
 // Pipeline cards the equipped wand cannot fire (shown to the player; they never fire silently as something else).
 const blockedCards = () => compilePipeline(G.slots, ST).out.filter(cc => stats(cc, ST).blocked);
-const wandCardH = (id, attr, extra = '') => { const w = wandOf(id); return `<button class="card u" ${attr} style="border-top-color:${w.col}"><em style="color:${w.col}">WAND</em><div style="height:40px;text-align:center;padding-top:4px">${wandIconHTML(id, 3, -35)}</div><b>${w.n}</b><small>${w.d}</small>${extra}</button>`; };
+const wandCardH = (id, attr, extra = '') => { const w = wandOf(id); return `<button class="card u" ${attr} style="border-top-color:${w.col}"><em style="color:${w.col}">WAND</em><div style="height:40px;text-align:center;padding-top:4px">${wandIconHTML(id, 3, -35)}</div><b>${w.n}</b>${wandCompatHTML(id)}${extra}</button>`; };
 function castLabel(c) {
  const mods = (c.mods || []).map((k, i) => `${MODS[k]?.n || k}${c.mv && c.mv[i] > 1 ? ' v' + c.mv[i] : ''}`);
  const spell = SPELLS[c.sp]?.n || c.sp || 'spell()';
@@ -4557,6 +4557,14 @@ function updPr(dt) {
  const arena = G.cfg.arena;
  for (const q of R.pr) {
   const a = q.a;
+  if (a.xZap && !q.lob) { // arcing projectiles (Tesla drones, arc bolt) zap the nearest bug in reach as they fly
+   q.zap = (q.zap || 0) - dt;
+   if (q.zap <= 0) {
+    q.zap = a.xZap.every; let zt = null, zd = a.xZap.reach;
+    for (const e of R.en) { if (e.dead) continue; const dd = Math.hypot(e.x - q.x, e.y - q.y); if (dd < zd) { zd = dd; zt = e; } }
+    if (zt) { R.lines.push({ x1: q.x, y1: q.y, x2: zt.x, y2: zt.y, l: .14, c: a.col, lightning: 1, seed: Math.random(), w: 1.6 }); hitE(zt, a.dmg * a.xZap.frac, { ...a, xArc: null, xZap: null, crit: 0, knock: 0 }, q); }
+   }
+  }
   if (q.lob != null) { // mortar shell: ignores bugs, detonates at its range or on a wall
    q.x += q.vx * dt; q.y += q.vy * dt; q.lob -= Math.hypot(q.vx, q.vy) * dt;
    if (q.lob <= 0 || wallHit(arena, q.x, q.y, 3)) { mortarBoom(q); q.life = 0; }
@@ -5344,7 +5352,28 @@ function drawEnemyTelegraphs(ctx, e) {
  ctx.restore();
 }
 
+function crackle(ctx, x, y, r, col, seed) { // short jagged electric arcs around a point
+ ctx.save(); ctx.strokeStyle = col; ctx.lineWidth = 1.3; ctx.lineCap = 'round'; ctx.shadowColor = col; ctx.shadowBlur = 6;
+ for (let k = 0; k < 3; k++) {
+  const an = seed * 7.3 + k * 2.1 + Math.sin(seed * 31 + k) * 1.2; ctx.beginPath(); ctx.moveTo(x, y);
+  let px = x, py = y; for (let j = 1; j <= 3; j++) { const rr = r * j / 3 * 2.4, jit = (Math.sin(seed * 53 + k * 9 + j * 5) * .6); px = x + Math.cos(an + jit) * rr; py = y + Math.sin(an + jit) * rr; ctx.lineTo(px, py); }
+  ctx.stroke();
+ }
+ ctx.restore();
+}
+function wandProjOverlay(ctx, q) { // what makes each wand/card combination LOOK different from the plain card
+ const fx = q.a.wandFx, r = Math.max(3, q.r || 4), t = R.t, seed = Math.floor(t * 24) + (q.x * .013 + q.y * .017);
+ if (fx === 'tesla' || fx === 'arcbolt') { crackle(ctx, q.x, q.y, r, fx === 'tesla' ? '#ffffff' : '#fff6b0', seed); ctx.save(); ctx.globalAlpha = .5; ctx.strokeStyle = fx === 'tesla' ? '#9fd8ff' : '#ffe066'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(q.x, q.y, r * 1.8 + Math.sin(t * 30) * .8, 0, 7); ctx.stroke(); ctx.restore(); }
+ else if (fx === 'ember' || fx === 'incend' || fx === 'napalmmine') { ctx.save(); ctx.globalCompositeOperation = 'lighter'; const an = Math.atan2(q.vy, q.vx); for (let k = 1; k <= 3; k++) { ctx.globalAlpha = .55 - k * .13; ctx.fillStyle = k === 1 ? '#ffd36a' : '#ff7a45'; ctx.beginPath(); ctx.arc(q.x - Math.cos(an) * k * r * .9 + Math.sin(t * 40 + k) * 1.2, q.y - Math.sin(an) * k * r * .9 + Math.cos(t * 37 + k) * 1.2, Math.max(1.2, r * (1 - k * .2)), 0, 7); ctx.fill(); } ctx.restore(); }
+ else if (fx === 'frostshell') { ctx.save(); ctx.strokeStyle = '#e6fbff'; ctx.lineWidth = 1.2; ctx.globalAlpha = .9; snowflake(ctx, q.x, q.y, r * 1.5, t * 3); ctx.restore(); }
+ else if (fx === 'mortar') { ctx.save(); ctx.strokeStyle = '#ff5c7a'; ctx.lineWidth = 1.4; ctx.globalAlpha = .55 + .3 * Math.sin(t * 16); ctx.beginPath(); ctx.arc(q.x, q.y, r * 2 + 2, 0, 7); ctx.stroke(); ctx.beginPath(); ctx.moveTo(q.x - r * 3, q.y); ctx.lineTo(q.x + r * 3, q.y); ctx.moveTo(q.x, q.y - r * 3); ctx.lineTo(q.x, q.y + r * 3); ctx.stroke(); ctx.restore(); }
+ else if (fx === 'harpoon' && R.p) { ctx.save(); ctx.strokeStyle = 'rgba(143,208,255,.55)'; ctx.lineWidth = 1.2; ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(R.p.x, R.p.y); ctx.lineTo(q.x, q.y); ctx.stroke(); ctx.restore(); }
+}
 function drawProjectile(ctx, q, enemy = false) {
+ drawProjectileBase(ctx, q, enemy);
+ if (!enemy && q.a && q.a.wandFx) wandProjOverlay(ctx, q);
+}
+function drawProjectileBase(ctx, q, enemy = false) {
  const col = q.a?.col || q.c || '#fff';
  const r = Math.max(2.5, q.r || 4);
  const vx = q.vx || 1, vy = q.vy || 0, ang = Math.atan2(vy, vx);
@@ -7428,7 +7457,7 @@ export function render() {
   ${G.sandbox ? `<div class="panel" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><b style="color:var(--mult)">SANDBOX // ADD CARD</b><select id="sbx-card" class="sbx-sel">${sbxCardOpts()}</select><select id="sbx-ver" class="sbx-sel"><option value="1">v1</option><option value="2">v2</option><option value="3">v3</option></select><button class="btn g sm" data-act="sbx-add">ADD TO PIPELINE</button><button class="btn g sm" data-act="sbx-add-hand">ADD TO HAND</button></div><div class="panel" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><b style="color:var(--mult)">SANDBOX // ADD WAND</b><select id="sbx-wand" class="sbx-sel">${sbxWandOpts()}</select><button class="btn g sm" data-act="sbx-wand-add">ADD</button><button class="btn g sm" data-act="sbx-wand-equip">ADD &amp; EQUIP</button><button class="btn g sm" data-act="sbx-wand-all">ADD ALL</button></div>` : ''}
 
   <div class="panel"><b>WAND</b> <span class="lbl">equipment // ${(G.wands || []).length} owned</span>
-   <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:6px;align-items:stretch">${(G.wands || ['universal']).map(id => { const w = wandOf(id), eq = G.wand === id, st = canStoreWand(id, G.wand, G.wands || []); return `<div class="card" style="cursor:default;min-width:150px;max-width:210px;border-top-color:${w.col};${eq ? 'outline:2px solid ' + w.col + ';' : ''}"><div style="height:44px;text-align:center;padding-top:6px">${wandIconHTML(id, 3, -35)}</div><em style="color:${w.col}">${eq ? 'EQUIPPED' : 'WAND'}</em><b>${w.n}</b><small>${w.d}</small><div style="margin-top:auto;display:flex;gap:4px;padding-top:6px"><button class="btn sm ${eq ? '' : 'g'}" data-act="wand-equip" data-wand="${id}" style="flex:1;font-size:10px;padding:4px 6px" ${eq ? 'disabled' : ''}>${eq ? 'Equipped' : 'Equip'}</button>${id === 'universal' ? '' : `<button class="btn sm g" data-act="wand-store" data-wand="${id}" style="flex:1;font-size:10px;padding:4px 6px" ${st ? '' : 'disabled'} title="${eq ? 'Equip another wand first' : 'Move to Storage (Wands tab)'}">Store</button>`}</div></div>`; }).join('')}</div>
+   <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:6px;align-items:stretch">${(G.wands || ['universal']).map(id => { const w = wandOf(id), eq = G.wand === id, st = canStoreWand(id, G.wand, G.wands || []); return `<div class="card" style="cursor:default;min-width:150px;max-width:210px;border-top-color:${w.col};${eq ? 'outline:2px solid ' + w.col + ';' : ''}"><div style="height:44px;text-align:center;padding-top:6px">${wandIconHTML(id, 3, -35)}</div><em style="color:${w.col}">${eq ? 'EQUIPPED' : 'WAND'}</em><b>${w.n}</b>${wandCompatHTML(id)}<div style="margin-top:auto;display:flex;gap:4px;padding-top:6px"><button class="btn sm ${eq ? '' : 'g'}" data-act="wand-equip" data-wand="${id}" style="flex:1;font-size:10px;padding:4px 6px" ${eq ? 'disabled' : ''}>${eq ? 'Equipped' : 'Equip'}</button>${id === 'universal' ? '' : `<button class="btn sm g" data-act="wand-store" data-wand="${id}" style="flex:1;font-size:10px;padding:4px 6px" ${st ? '' : 'disabled'} title="${eq ? 'Equip another wand first' : 'Move to Storage (Wands tab)'}">Store</button>`}</div></div>`; }).join('')}</div>
    ${wandBlocked.length ? `<p class="lbl" style="color:#ff6a6a;margin:6px 0 0">// ${wandBlocked.length} pipeline spell${wandBlocked.length > 1 ? 's' : ''} cannot be fired by this wand (${[...new Set(wandBlocked.map(cc => SPELLS[cc.sp].n))].join(', ')}). They will not fire. Switch wands or change the pipeline.</p>` : ''}</div>
   <div class="panel"><pre>${ok ? cp.out.map(cc => lineOf(cc, ST)).join('\n') : '// slot at least one damage spell the equipped wand can fire'}${cp.dead.length ? '\n// warning: trailing modifier does nothing' : ''}</pre></div>
 

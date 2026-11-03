@@ -230,6 +230,7 @@ export const EXTRA_FX = {
  incendiary: { r: 30, life: 2.2, tick: .5, dmgMul: .18, max: 8 }, napalmMine: { r: 36, life: 2.6, tick: .5, dmgMul: .2, max: 8 },
  relay: { r: 46, frac: .5 }
 };
+export const ZAP = { every: .3, reach: 95, frac: .35 }; // in-flight lightning: arcing projectiles zap the nearest bug in reach every `every` seconds (frac of their damage)
 export const EXTRA_BW = { // provisional BW per cast
  frostShell: 6, frostNova: 7, gauss: 9, siegeRail: 16, incendiary: 5, napalmMine: 7, tesla: 7, ember: 6, arcBolt: 6, teslaPing: 8,
  mortar: 9, ringMines: 8, harpoon: 8, skewer: 7, cascade: 7, relay: 8
@@ -254,12 +255,12 @@ const EXTRA = {
  },
  swarm: {
   _d: 'Fires bolt(), chain() and fireball(). bolt() becomes a cloud of homing drones. chain() becomes TESLA SWARM: arcing drones that discharge lightning into nearby bugs on every hit. fireball() becomes a swarm of burning embers.',
-  chain(a) { lbl(a, 'tesla', 'tesla swarm: drones that arc lightning', '#b8f06a'); swarmish(a, 4, .5); a.xArc = EXTRA_FX.teslaDrone; a.bw = EXTRA_BW.tesla; },
+  chain(a) { lbl(a, 'tesla', 'tesla swarm: drones that arc lightning', '#f4ff6a'); swarmish(a, 4, .5); a.xArc = EXTRA_FX.teslaDrone; a.xZap = ZAP; a.bw = EXTRA_BW.tesla; },
   fireball(a) { lbl(a, 'ember', 'ember swarm: burning drones', '#ff9a5c'); swarmish(a, 6, .3); a.burn = Math.max(1, a.burn || 0); a.bw = EXTRA_BW.ember; }
  },
  stormcaller: {
   _d: 'Fires chain(), bolt() and ping(). chain() becomes a forking lightning tree. bolt() becomes an arc bolt whose hits jump lightning to nearby bugs. ping() becomes a Tesla beam that arcs out of every bug it pierces.',
-  bolt(a) { lbl(a, 'arcbolt', 'arc bolt: hits arc to nearby bugs', '#ffe066'); a.xArc = EXTRA_FX.arcBolt; a.bw = EXTRA_BW.arcBolt; },
+  bolt(a) { lbl(a, 'arcbolt', 'arc bolt: hits arc to nearby bugs', '#ffe066'); a.xArc = EXTRA_FX.arcBolt; a.xZap = ZAP; a.bw = EXTRA_BW.arcBolt; },
   ping(a) { lbl(a, 'teslaping', 'tesla beam: arcs from every bug pierced', '#ffe066'); a.xArc = EXTRA_FX.teslaPing; a.dmg *= 1.1; a.bw = EXTRA_BW.teslaPing; }
  },
  demolitionist: {
@@ -298,3 +299,18 @@ WANDS.pulse = {
   else if (c.sp === 'chain') { lbl(a, 'relay', 'pulse relay: each bug struck emits a shockwave', '#5ee0d0'); a.xPulse = EXTRA_FX.relay; a.bw = EXTRA_BW.relay; }
  }
 };
+
+// ---- Compact per-card descriptions (shown as "Compatibility" lists in the equipment panel, reward cards and Storage) ----
+export const CARD_DESC = {
+ universal: { '*': 'normal attacks, no changes' },
+ cryomancer: { stdout: 'icy stream, freezes the floor', fireball: 'frost shell, freezes + ices ground', nova: 'freezing ring, ices ground' },
+ railgun: { ping: 'heavy rail shot, ramps per bug', bolt: 'hitscan gauss bolt', lance: 'long siege rail, steep ramp' },
+ pyromancer: { fireball: 'napalm shell + burn patch', bolt: 'ignites, burn patches on hit', mine: 'napalm mine, burn patches' },
+ swarm: { bolt: 'cloud of homing drones', chain: 'tesla drones that arc lightning', fireball: 'burning ember drones' },
+ stormcaller: { chain: 'forking lightning tree', bolt: 'arc bolt, hits jump to nearby', ping: 'tesla beam, arcs from each bug' },
+ demolitionist: { mine: 'row of 3 ripple mines', fireball: 'mortar lob, big blast', nova: 'ring of 4 mines' },
+ lancer: { lance: 'harpoon, pierces + pulls bugs in', ping: 'skewer beam, drags bugs back' },
+ pulse: { nova: '3 concentric shockwaves', chain: 'each bug struck emits a shockwave' }
+};
+export const wandCompat = id => Object.entries(CARD_DESC[id] || {}).map(([k, t]) => [k === '*' ? 'all attack cards' : k + '()', t]);
+for (const id in WANDS) WANDS[id].d = wandCompat(id).map(([k, t]) => k + ' : ' + t).join('; '); // short tooltip text

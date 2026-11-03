@@ -1,7 +1,7 @@
 import { defOf, maxV, xText, wo, isMod } from './helpers.js';
 import { RC, RAR } from './data.js';
 import { wandOf } from './wands.js';
-import { wandIconHTML } from './wandart.js';
+import { wandIconHTML, wandCompatHTML } from './wandart.js';
 
 export function groupCards(list) {
  const map = new Map();
@@ -78,7 +78,7 @@ function renderWandStorage(G) {
      <div style="text-align:center;padding:6px 0 2px;height:46px">${wandIconHTML(id, 3, -35)}</div>
      <em style="color:${w.col}">WAND</em>
      <b>${w.n}</b>
-     <small>${w.d}</small>
+     ${wandCompatHTML(id)}
      <div style="margin-top:auto;display:flex;gap:4px;padding-top:6px;border-top:1px dashed rgba(120,120,120,.3)">
        <button class="btn sm" data-wand-restore="${id}" style="padding:4px 6px;font-size:10px;flex:1" title="Return this wand to your collection (it is not auto-equipped)">⬆️ Restore</button>
        <button class="btn sm g" data-wand-recycle="${id}" style="padding:4px 6px;font-size:10px;flex:1" title="Delete this wand and receive 1 random new wand">♻️ Recycle</button>

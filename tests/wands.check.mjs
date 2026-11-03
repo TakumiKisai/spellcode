@@ -1,5 +1,5 @@
 import { SPELLS } from '../src/data.js';
-import { WANDS, WAND_ACQ, wandsOffered, canStoreWand, specialWands, wandAccepts, applyWand, bwCost, bwMaxFor, bwRegen, clampBW, BW_CFG, CRYO, FX_LABEL } from '../src/wands.js';
+import { CARD_DESC, WANDS, WAND_ACQ, wandsOffered, canStoreWand, specialWands, wandAccepts, applyWand, bwCost, bwMaxFor, bwRegen, clampBW, BW_CFG, CRYO, FX_LABEL } from '../src/wands.js';
 let fails = 0; const bad = m => { fails++; console.log('FAIL:', m); }, ok = (c, m) => { if (!c) bad(m); };
 const mkA = sp => ({ ...SPELLS[sp], rate: SPELLS[sp].rate, rep: 1, pc: 1, area: 1, size: 1, burn: SPELLS[sp].burn || 0, freeze: 0, pierce: SPELLS[sp].pierce || 0, dmg: SPELLS[sp].dmg, sp: SPELLS[sp].sp || 0, rad: SPELLS[sp].rad || 10, knock: SPELLS[sp].knock || 0, jumps: SPELLS[sp].jumps || 0 });
 const MATRIX = { // the cards each specialized wand fires; every pair has its own unique transformation
@@ -26,6 +26,7 @@ for (const [w, cards] of Object.entries(MATRIX)) {
  }
  for (const k of attackCards.filter(k => !cards.includes(k))) ok(applyWand(mkA(k), { sp: k }, w, SPELLS[k]).blocked, w + ' must block ' + k);
 }
+for (const [w, cards] of Object.entries(MATRIX)) for (const k of cards) ok(CARD_DESC[w] && CARD_DESC[w][k], w + '/' + k + ' has a compact description');
 console.log('attack cards without a specialized wand yet:', attackCards.filter(k => !Object.values(MATRIX).flat().includes(k)).join(', '));
 // the wunderwaffe: chain under the Swarm Wand = arcing drones
 { const t = applyWand(mkA('chain'), { sp: 'chain' }, 'swarm', SPELLS.chain); ok(t.swarmN >= 3 && t.xArc && t.home && t.pierce === 0, 'swarm+chain = homing drones that arc lightning'); }

@@ -1,6 +1,6 @@
 // Wand pixel art (browser only). Sprites are data in wands.js (`art`), rasterised once to a 20x7 canvas and reused everywhere:
 // HUD, equipment panel, Storage, reward cards and the in-world wand held by the Host. One source of truth keeps sandbox and normal runs identical.
-import { wandOf } from './wands.js';
+import { wandOf, wandCompat } from './wands.js';
 export const WAND_PX = { w: 20, h: 7 };
 const cache = {};
 export function wandCanvas(id) {
@@ -15,3 +15,6 @@ const urls = {};
 export const wandIconURL = id => urls[id] ||= wandCanvas(id).toDataURL();
 // <img> for HTML UIs. Rotated so the wand reads as an item icon rather than a thin bar.
 export const wandIconHTML = (id, px = 4, rot = -35) => `<img class="wand-ico" alt="" src="${wandIconURL(id)}" style="width:${WAND_PX.w * px}px;height:${WAND_PX.h * px}px;image-rendering:pixelated;transform:rotate(${rot}deg)">`;
+
+// Compact "Compatibility" block used everywhere a wand is described.
+export const wandCompatHTML = id => `<div class="wc" style="font-size:10.5px;line-height:1.4;margin-top:4px;text-align:left"><div style="opacity:.65;text-transform:uppercase;letter-spacing:.08em;font-size:9px">Compatibility</div>${wandCompat(id).map(([k, t]) => `<div><b>${k}</b> : ${t}</div>`).join('')}</div>`;
