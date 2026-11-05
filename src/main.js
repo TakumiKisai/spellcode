@@ -84,7 +84,7 @@ function pauseHTML() {
   <div class="set-row"><span>Sound (everything)</span><button class="btn g" data-pa="mute">${MUTE ? 'off' : 'on'}</button></div>
   ${row('mus')}${row('sx')}
   <div class="set-sec">GRAPHICS</div>
-  ${['q', 'pt', 'gw', 'fl', 'ef', 'shake', 'dmg'].map(row).join('')}
+  ${['q', 'pt', 'gw', 'fl', 'ef', 'shake', 'dmg', 'cc'].map(row).join('')}
   <div class="set-sec">GAMEPLAY</div>
   ${row('aim')}
   <div class="set-sec">BOSS HP DISPLAY</div>
@@ -1953,6 +1953,8 @@ function fire(c) {
     const an = a0 + (n > 1 ? (i / (n - 1) - .5) * 1.1 : 0) + (Math.random() - .5) * .25, sp = a.sp * (.85 + Math.random() * .3);
     R.pr.push({ x: p.x, y: p.y, vx: Math.cos(an) * sp, vy: Math.sin(an) * sp, a, shape: 'drone', life: 2.8, hit: new Set(), pierce: 0, bounce: a.bounce, r: Math.min(a.rad * a.size, 8) });
    }
+  } else if (a.salvo) { // Railgun bolt: a train of fast piercing slugs, so one target is hit several times
+   for (let i = 0; i < a.salvo; i++) R.pr.push({ x: p.x - Math.cos(a0) * i * 22, y: p.y - Math.sin(a0) * i * 22, vx: Math.cos(a0) * a.sp, vy: Math.sin(a0) * a.sp, a, shape: 'bolt', life: 1.1, hit: new Set(), pierce: 99, bounce: 0, r: 3 });
   } else if (a.lob) { // Demolitionist mortar: flies over bugs to a fixed range, then detonates
    R.pr.push({ x: p.x, y: p.y, vx: Math.cos(a0) * a.sp, vy: Math.sin(a0) * a.sp, a, shape: 'napalm', life: 3, hit: new Set(), pierce: 0, bounce: 0, r: 6, lob: a.lob * a.area });
   } else for (let i = 0; i < a.pc; i++) {
@@ -1969,7 +1971,12 @@ function fire(c) {
   }
  } else if (a.k === 'nova') {
   const nr = a.rad * a.area;
-  if (a.cascade) { for (const f of [.45, .75, 1]) { R.fx.push({ nova: 1, x: p.x, y: p.y, r: 0, max: nr * f, l: .34, d: .34, c: a.col }); blast(p.x, p.y, nr * f, a.dmg, a, null, 0, 1); } } // Pulse Cascade: the core is hit by all three rings
+  if (a.gravity) { // Singularity: drag everything toward you, then crush what arrives
+   pullTo(p.x, p.y, nr * 1.6, 460);
+   R.fx.push({ nova: 1, x: p.x, y: p.y, r: 0, max: nr * 1.2, l: .45, d: .45, c: a.col });
+   for (let i = 0; i < 14; i++) { const an = i * .45, d0 = nr * 1.2; part(p.x + Math.cos(an) * d0, p.y + Math.sin(an) * d0, -Math.cos(an) * 230, -Math.sin(an) * 230, .4, a.col, 2.5, 1); }
+   blast(p.x, p.y, nr * .7, a.dmg, { ...a, knock: 0 }, null, 0, 0);
+  } else if (a.cascade) { for (const f of [.45, .75, 1]) { R.fx.push({ nova: 1, x: p.x, y: p.y, r: 0, max: nr * f, l: .34, d: .34, c: a.col }); blast(p.x, p.y, nr * f, a.dmg, a, null, 0, 1); } } // Pulse Cascade: the core is hit by all three rings
   else {
   R.fx.push({ nova: 1, x: p.x, y: p.y, r: 0, max: nr, l: .34, d: .34, c: a.col });
   blast(p.x, p.y, nr, a.dmg, a, null, 0, 1);
@@ -2027,7 +2034,9 @@ function fire(c) {
    const anyHit = hitWall || tg.length > 0;
    if (rail) { // Railgun: heavy, lingering white-violet rail with a muzzle ring and sparks along the whole path
     tg.sort((e1, e2) => Math.hypot(e1.x - p.x, e1.y - p.y) - Math.hypot(e2.x - p.x, e2.y - p.y));
-    R.lines.push({ x1: p.x, y1: p.y, x2: hx, y2: hy, l: .34, c: '#b48cff', w: 11 + a.size * 2, laser: 1, ping: 1, core: '#ffffff', impact: anyHit ? 1 : 0 });
+    if (a.railSnipe && tg.length > 1) tg.length = 1; // sniper rail stops at the first bug
+    const ex = a.railSnipe && tg[0] ? tg[0].x : hx, ey = a.railSnipe && tg[0] ? tg[0].y : hy;
+    R.lines.push({ x1: p.x, y1: p.y, x2: ex, y2: ey, l: .34, c: '#b48cff', w: 11 + a.size * 2, laser: 1, ping: 1, core: '#ffffff', impact: anyHit ? 1 : 0 });
     ring(p.x + ca * 14, p.y + sa * 14, 22, '#d9c2ff', .22); R.shake = Math.max(R.shake, 4);
     for (let d = 20; d < L; d += 42) part(p.x + ca * d, p.y + sa * d, (Math.random() - .5) * 60, (Math.random() - .5) * 60, .35, Math.random() < .5 ? '#d9c2ff' : '#ffffff', 2 + Math.random() * 1.5, 0);
    } else
@@ -2041,14 +2050,16 @@ function fire(c) {
    }
    for (const e of tg) {
     R.fx.push({ star: 1, small: 1, x: e.x, y: e.y, r: 0, max: 8 + a.size * 1.5, l: .2, d: .2, c: a.col, seed: Math.random() * 6 });
-    hitE(e, a.dmg, a, p, undefined, rail ? 1 + a.railRamp * tg.indexOf(e) : 1); // rail: +30% damage for every bug already pierced
+    hitE(e, a.dmg, a, p, undefined, rail ? (a.railSnipe ? 1 + Math.hypot(e.x - p.x, e.y - p.y) / 260 : 1 + a.railRamp * tg.indexOf(e)) : 1); // rail: +30% per bug pierced; sniper: grows with distance
    }
-   if (rail && tg.length >= 2) txt(hx, hy - 16, 'x' + tg.length + ' RAIL', '#d9c2ff', 11);
+   if (rail && a.railSnipe && tg[0]) txt(tg[0].x, tg[0].y - 18, 'SNIPE x' + (1 + Math.hypot(tg[0].x - p.x, tg[0].y - p.y) / 260).toFixed(1), '#d9c2ff', 11);
+   if (rail && !a.railSnipe && tg.length >= 2) txt(hx, hy - 16, 'x' + tg.length + ' RAIL', '#d9c2ff', 11);
    if (a.pull && tg.length) pullTo(p.x, p.y, 280, [170, 250, 340][a.pull - 1] || 340); // Lancer skewer: drag everything hit back toward you
   }
  } else if (a.k === 'melee') {
   const a0 = aimAngle(), rg = 66 * a.area;
   R.fx.push({ slash: 1, melee: 1, x: p.x, y: p.y, a: a0, r: 0, max: rg, w: 1.2 + (a.pc > 1 ? .5 * (a.pc - 1) / 2 : 0), l: .4, d: .4, c: a.col });
+  if (a.wandFx === 'thunder') for (let i = 0; i < 5; i++) { const an = a0 + (i - 2) * .45; R.lines.push({ x1: p.x, y1: p.y, x2: p.x + Math.cos(an) * rg, y2: p.y + Math.sin(an) * rg, l: .22, c: a.col, lightning: 1, seed: Math.random(), w: 2.2 }); } // Stormcaller: the sword is a bolt of lightning
   for (const e of R.en) {
    if (e.dead) continue;
    const dx = e.x - p.x, dy = e.y - p.y;
@@ -2066,7 +2077,7 @@ function fire(c) {
    if (Math.abs(df) < arc) { b.l = 0; for (let k = 0; k < 3; k++) part(b.x, b.y, (Math.random() - .5) * 140, (Math.random() - .5) * 140, .25, a.col, 2); sfx('orbit_block', { x: b.x }); }
   }
  } else if (a.k === 'orbit') {
-  const nb = 2 * a.rep + (a.pc > 1 ? 2 : 0) + Math.max(0, (a.lv || 1) - 1);
+  const nb = Math.round((2 * a.rep + (a.pc > 1 ? 2 : 0) + Math.max(0, (a.lv || 1) - 1)) * (a.orbitMul || 1));
   // NERF: one activation = one set of blades. Repeat casts (for/async/fork) can no longer rebuild a damaged ring mid-activation.
   if (p.orb && p.orb.t > 0) return false;
   sfx('cast_orbit', { x: p.x });
@@ -2102,13 +2113,14 @@ function addFrostZone(x, y) {
  if (R.frost.length < F.max) R.frost.push({ x, y, r: F.r * (.9 + Math.random() * .4), l: F.life, m: F.life, seed: Math.random() * 9 });
 }
 function wandOnHit(e, a, d) {
- const base = { ...a, xArc: null, xBurnZ: null, xFrostZ: null, xPulse: null, crit: 0, knock: 0 };
+ const base = { ...a, xArc: null, xBurnZ: null, xFrostZ: null, xPulse: null, xPull: 0, crit: 0, knock: 0 };
  if (a.xArc) {
   const X = a.xArc, kids = R.en.filter(o => !o.dead && o !== e && Math.hypot(o.x - e.x, o.y - e.y) < X.reach).sort((o1, o2) => Math.hypot(o1.x - e.x, o1.y - e.y) - Math.hypot(o2.x - e.x, o2.y - e.y)).slice(0, X.n);
   for (const o of kids) { R.lines.push({ x1: e.x, y1: e.y, x2: o.x, y2: o.y, l: .16, c: a.col, lightning: 1, seed: Math.random(), w: 1.8 }); hitE(o, d * X.frac, base, e); }
  }
  if (a.xBurnZ) addBurnZone(e.x, e.y, base, d, a.xBurnZ);
  if (a.xFrostZ) addFrostZone(e.x, e.y);
+ if (a.xPull && !e.boss && R.p) { const dx = R.p.x - e.x, dy = R.p.y - e.y, dd = Math.hypot(dx, dy) || 1; e.kx += dx / dd * a.xPull; e.ky += dy / dd * a.xPull; } // drag the bug toward you
  if (a.xPulse) { ring(e.x, e.y, a.xPulse.r, a.col, .2); blast(e.x, e.y, a.xPulse.r, d * a.xPulse.frac, base, e, 0, 0); }
 }
 function mortarBoom(q) {
@@ -2368,7 +2380,7 @@ function hitE(e, d, a, src, np, damageScale = 1) {
  if (R.sandbox && R.sbOneHit) d *= 100;
  if (e.dead) return;
  if (e.inv > 0) { txt(e.x, e.y - e.r, 'IMMUNE', '#aab4c8', 10); return; }
- if (a.xArc || a.xBurnZ || a.xFrostZ || a.xPulse) wandOnHit(e, a, d); // wand on-hit effects (arc / burn patch / ice / pulse); the follow-up hits carry no effect flags, so nothing recurses
+ if (a.xArc || a.xBurnZ || a.xFrostZ || a.xPulse || a.xPull) wandOnHit(e, a, d); // wand on-hit effects (arc / burn patch / ice / pulse); the follow-up hits carry no effect flags, so nothing recurses
  const sc = a.crit >= 1, crit = sc || Math.random() < ST.crit;
  let v = d * (crit ? (sc ? 1 + a.crit : 2) : 1) * e.prot * (e.vuln > 0 ? 1.5 : 1);
  const overloadState = e.boss && e.bd0?.n === 'SEGMENT FAULT' ? R.seg?.overload?.state : null;
@@ -4620,6 +4632,10 @@ function updPr(dt) {
      }
      burst(q.x, q.y, a.col, 3);
      if (a.wandFx === 'pyro') { pyroBoom(q, e); q.pierce = 0; }
+     if (a.wandFx === 'refract' && !q.child) { // Prism refractor: splits into two children on every hit (the children do not split again)
+      const an = Math.atan2(q.vy, q.vx), sp = Math.hypot(q.vx, q.vy);
+      for (const sg of [-1, 1]) R.pr.push({ x: q.x, y: q.y, vx: Math.cos(an + sg * .5) * sp, vy: Math.sin(an + sg * .5) * sp, a: { ...a, wandFx: 'refractc', dmg: a.dmg * .7 }, shape: 'fireball', life: 1.3, hit: new Set([e]), pierce: 0, bounce: 0, r: 4, child: 1 });
+     }
      if (a.expl) blast(q.x, q.y, 50 * a.area * (1 + .3 * (a.expl - 1)), a.dmg * (.6 + .2 * (a.expl - 1)), { col: a.col, crit: 0 }, e, 0);
      if (a.pull) {
       const reach = [110, 155, 205][a.pull - 1] || 205;
@@ -5365,6 +5381,8 @@ function wandProjOverlay(ctx, q) { // what makes each wand/card combination LOOK
  const fx = q.a.wandFx, r = Math.max(3, q.r || 4), t = R.t, seed = Math.floor(t * 24) + (q.x * .013 + q.y * .017);
  if (fx === 'tesla' || fx === 'arcbolt') { crackle(ctx, q.x, q.y, r, fx === 'tesla' ? '#ffffff' : '#fff6b0', seed); ctx.save(); ctx.globalAlpha = .5; ctx.strokeStyle = fx === 'tesla' ? '#9fd8ff' : '#ffe066'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(q.x, q.y, r * 1.8 + Math.sin(t * 30) * .8, 0, 7); ctx.stroke(); ctx.restore(); }
  else if (fx === 'ember' || fx === 'incend' || fx === 'napalmmine') { ctx.save(); ctx.globalCompositeOperation = 'lighter'; const an = Math.atan2(q.vy, q.vx); for (let k = 1; k <= 3; k++) { ctx.globalAlpha = .55 - k * .13; ctx.fillStyle = k === 1 ? '#ffd36a' : '#ff7a45'; ctx.beginPath(); ctx.arc(q.x - Math.cos(an) * k * r * .9 + Math.sin(t * 40 + k) * 1.2, q.y - Math.sin(an) * k * r * .9 + Math.cos(t * 37 + k) * 1.2, Math.max(1.2, r * (1 - k * .2)), 0, 7); ctx.fill(); } ctx.restore(); }
+ else if (fx === 'salvo') { ctx.save(); const an = Math.atan2(q.vy, q.vx), g = ctx.createLinearGradient(q.x, q.y, q.x - Math.cos(an) * 40, q.y - Math.sin(an) * 40); g.addColorStop(0, 'rgba(255,255,255,.95)'); g.addColorStop(1, 'rgba(180,140,255,0)'); ctx.strokeStyle = g; ctx.lineWidth = 2.4; ctx.beginPath(); ctx.moveTo(q.x, q.y); ctx.lineTo(q.x - Math.cos(an) * 40, q.y - Math.sin(an) * 40); ctx.stroke(); ctx.restore(); }
+ else if (fx === 'ricochet' || fx === 'refract' || fx === 'refractc' || fx === 'spectrum') { ctx.save(); const hue = (t * 240 + q.x * .5) % 360; ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = 'hsla(' + hue + ',100%,70%,.55)'; ctx.beginPath(); ctx.arc(q.x, q.y, r * 1.7, 0, 7); ctx.fill(); ctx.strokeStyle = 'hsla(' + (hue + 120) % 360 + ',100%,75%,.7)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(q.x, q.y, r * 2.4 + Math.sin(t * 20) * .6, 0, 7); ctx.stroke(); ctx.restore(); }
  else if (fx === 'frostshell') { ctx.save(); ctx.strokeStyle = '#e6fbff'; ctx.lineWidth = 1.2; ctx.globalAlpha = .9; snowflake(ctx, q.x, q.y, r * 1.5, t * 3); ctx.restore(); }
  else if (fx === 'mortar') { ctx.save(); ctx.strokeStyle = '#ff5c7a'; ctx.lineWidth = 1.4; ctx.globalAlpha = .55 + .3 * Math.sin(t * 16); ctx.beginPath(); ctx.arc(q.x, q.y, r * 2 + 2, 0, 7); ctx.stroke(); ctx.beginPath(); ctx.moveTo(q.x - r * 3, q.y); ctx.lineTo(q.x + r * 3, q.y); ctx.moveTo(q.x, q.y - r * 3); ctx.lineTo(q.x, q.y + r * 3); ctx.stroke(); ctx.restore(); }
  else if (fx === 'harpoon' && R.p) { ctx.save(); ctx.strokeStyle = 'rgba(143,208,255,.55)'; ctx.lineWidth = 1.2; ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(R.p.x, R.p.y); ctx.lineTo(q.x, q.y); ctx.stroke(); ctx.restore(); }

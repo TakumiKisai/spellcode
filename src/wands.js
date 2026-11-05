@@ -226,69 +226,58 @@ export const FX_LABEL = { cryo: 'cryogenic stream', rail: 'rail shot', pyro: 'na
 //   xFrostZ: leaves slowing floor ice                                                                 xPulse {r,frac}: each hit releases a small shockwave
 // Delivery overrides read by fire(): swarmN (drones), lob (mortar), ringMines, cascade (concentric rings), k:'beam' (hitscan rail), pull (gravity).
 export const EXTRA_FX = {
- arcBolt: { n: 2, frac: .6, reach: 130 }, teslaPing: { n: 2, frac: .5, reach: 140 }, teslaDrone: { n: 2, frac: .6, reach: 110 },
+ arcBolt: { n: 2, frac: .6, reach: 130 }, teslaPing: { n: 2, frac: .5, reach: 140 }, teslaDrone: { n: 2, frac: .6, reach: 110 }, thunder: { n: 2, frac: .6, reach: 120 }, stormOrbit: { n: 1, frac: .7, reach: 110 },
  incendiary: { r: 30, life: 2.2, tick: .5, dmgMul: .18, max: 8 }, napalmMine: { r: 36, life: 2.6, tick: .5, dmgMul: .2, max: 8 },
- relay: { r: 46, frac: .5 }
+ relay: { r: 46, frac: .5 }, pulseOrbit: { r: 40, frac: .5 }, emberBurst: { r: 34, frac: .7 }, breach: { r: 56, frac: .6 },
+ horizonPull: 170, grapplePull: 360
 };
 export const ZAP = { every: .3, reach: 95, frac: .35 }; // in-flight lightning: arcing projectiles zap the nearest bug in reach every `every` seconds (frac of their damage)
-export const EXTRA_BW = { // provisional BW per cast
- frostShell: 6, frostNova: 7, gauss: 9, siegeRail: 16, incendiary: 5, napalmMine: 7, tesla: 7, ember: 6, arcBolt: 6, teslaPing: 8,
- mortar: 9, ringMines: 8, harpoon: 8, skewer: 7, cascade: 7, relay: 8
+export const EXTRA_BW = { // provisional BW per successful cast
+ frostShell: 6, frostNova: 7, frostBlade: 7, salvo: 11, sniper: 15, incendiary: 5, napalmMine: 7, flameSword: 7, fireBlades: 10, tesla: 7, ember: 6, satellites: 10,
+ arcBolt: 6, teslaPing: 8, thunder: 8, stormOrbit: 10, mortar: 9, ringMines: 8, breach: 9, harpoon: 8, skewer: 7, cascade: 7, relay: 8, pulseOrbit: 10,
+ inferno: 6, gravWell: 9, horizon: 10, grapple: 7, ricochet: 5, refract: 7, spectrum: 14
 };
 const swarmish = (a, n, dmgMul) => { a.swarmN = n; a.dmg *= dmgMul; a.pierce = 0; a.home = Math.max(1, a.home || 0); a.turn = Math.max(a.turn || 0, SWARM.turn); a.sp = (a.sp || 0) > 0 ? a.sp * SWARM.speedMul : 260; a.rad = SWARM.rad; a.bounce = 0; };
 const lbl = (a, fx, text, col) => { a.wandFx = fx; a.fxLabel = text; if (col) a.col = col; };
 const EXTRA = {
  cryomancer: {
-  _d: 'Fires stdout(), fireball() and nova(). stdout() becomes a Cryogenic Stream. fireball() becomes a frost shell that freezes and leaves ice. nova() becomes a freezing ring that ices the floor. All cost Bandwidth.',
   fireball(a) { lbl(a, 'frostshell', 'frost shell: freezes + ice patch', '#7ee8ff'); a.freeze = Math.max(1, a.freeze); a.xFrostZ = 1; a.burn = 0; a.sp *= .9; a.bw = EXTRA_BW.frostShell; },
-  nova(a) { lbl(a, 'frostnova', 'frost nova: freezing ring + ice', '#7ee8ff'); a.freeze = Math.max(1, a.freeze); a.xFrostZ = 1; a.burn = 0; a.bw = EXTRA_BW.frostNova; }
+  nova(a) { lbl(a, 'frostnova', 'frost nova: freezing ring + ice', '#7ee8ff'); a.freeze = Math.max(1, a.freeze); a.xFrostZ = 1; a.burn = 0; a.bw = EXTRA_BW.frostNova; },
+  rm(a) { lbl(a, 'frostblade', 'frost blade: freezing sweep, ice underfoot', '#7ee8ff'); a.freeze = Math.max(1, a.freeze); a.xFrostZ = 1; a.bw = EXTRA_BW.frostBlade; }
  },
  railgun: {
-  _d: 'Fires ping(), bolt() and lance(). ping() becomes a heavy rail shot that ramps damage per bug pierced. bolt() becomes a hitscan Gauss bolt. lance() becomes a long Siege Rail with a steep ramp.',
-  bolt(a) { lbl(a, 'rail', 'gauss bolt: hitscan rail', '#b48cff'); a.k = 'beam'; a.dmg *= 2; a.rate *= .6; a.railLen = 420; a.railRamp = .2; a.knock = Math.max(a.knock || 0, 40); a.bw = EXTRA_BW.gauss; },
-  lance(a) { lbl(a, 'rail', 'siege rail: long, steep ramp', '#b48cff'); a.k = 'beam'; a.dmg *= 1.35; a.rate *= .7; a.railLen = 560; a.railRamp = .45; a.knock = Math.max(a.knock || 0, 80); a.bw = EXTRA_BW.siegeRail; }
+  bolt(a) { lbl(a, 'salvo', 'slug salvo: 3 piercing slugs in a train', '#b48cff'); a.salvo = 3; a.pierce = 99; a.sp = 900; a.dmg *= 1.1; a.rate *= .8; a.rad = 3; a.bw = EXTRA_BW.salvo; },
+  lance(a) { lbl(a, 'rail', 'sniper rail: one target, damage grows with distance', '#b48cff'); a.k = 'beam'; a.railSnipe = 1; a.railLen = 560; a.railRamp = 0; a.dmg *= 1.2; a.rate *= .85; a.knock = Math.max(a.knock || 0, 60); a.bw = EXTRA_BW.sniper; }
  },
  pyromancer: {
-  _d: 'Fires fireball(), bolt() and mine(). fireball() becomes a napalm shell with a burning patch. bolt() becomes an incendiary bolt that sets a patch alight under every bug it hits. mine() becomes a napalm mine.',
   bolt(a) { lbl(a, 'incend', 'incendiary bolt: burn patches on hit', '#ff7a45'); a.burn = Math.max(1, a.burn || 0); a.xBurnZ = EXTRA_FX.incendiary; a.bw = EXTRA_BW.incendiary; },
-  mine(a) { lbl(a, 'napalmmine', 'napalm mine: blast + burn patches', '#ff7a45'); a.burn = Math.max(1, a.burn || 0); a.xBurnZ = EXTRA_FX.napalmMine; a.bw = EXTRA_BW.napalmMine; }
+  mine(a) { lbl(a, 'napalmmine', 'napalm mine: blast + burn patches', '#ff7a45'); a.burn = Math.max(1, a.burn || 0); a.xBurnZ = EXTRA_FX.napalmMine; a.bw = EXTRA_BW.napalmMine; },
+  rm(a) { lbl(a, 'flamesword', 'flame sword: burning sweep, fire on the ground', '#ff7a45'); a.burn = Math.max(1, a.burn || 0); a.xBurnZ = EXTRA_FX.incendiary; a.bw = EXTRA_BW.flameSword; },
+  stdout(a) { lbl(a, 'inferno', 'inferno: longer flames, burn patches', '#ff7a45'); a.xBurnZ = EXTRA_FX.incendiary; a.area *= 1.25; a.dmg *= 1.1; a.bw = EXTRA_BW.inferno; },
+  orbit(a) { lbl(a, 'fireblades', 'fire blades: burning orbit, fire trail', '#ff7a45'); a.burn = Math.max(1, a.burn || 0); a.xBurnZ = EXTRA_FX.incendiary; a.bw = EXTRA_BW.fireBlades; }
  },
  swarm: {
-  _d: 'Fires bolt(), chain() and fireball(). bolt() becomes a cloud of homing drones. chain() becomes TESLA SWARM: arcing drones that discharge lightning into nearby bugs on every hit. fireball() becomes a swarm of burning embers.',
   chain(a) { lbl(a, 'tesla', 'tesla swarm: drones that arc lightning', '#f4ff6a'); swarmish(a, 4, .5); a.xArc = EXTRA_FX.teslaDrone; a.xZap = ZAP; a.bw = EXTRA_BW.tesla; },
-  fireball(a) { lbl(a, 'ember', 'ember swarm: burning drones', '#ff9a5c'); swarmish(a, 6, .3); a.burn = Math.max(1, a.burn || 0); a.bw = EXTRA_BW.ember; }
+  fireball(a) { lbl(a, 'ember', 'ember swarm: drones burst on contact', '#ff9a5c'); swarmish(a, 6, .3); a.burn = Math.max(1, a.burn || 0); a.xPulse = EXTRA_FX.emberBurst; a.bw = EXTRA_BW.ember; },
+  orbit(a) { lbl(a, 'satellites', 'satellites: twice the blades, each weaker', '#9dff7a'); a.orbitMul = 2; a.dmg *= .55; a.bw = EXTRA_BW.satellites; }
  },
  stormcaller: {
-  _d: 'Fires chain(), bolt() and ping(). chain() becomes a forking lightning tree. bolt() becomes an arc bolt whose hits jump lightning to nearby bugs. ping() becomes a Tesla beam that arcs out of every bug it pierces.',
   bolt(a) { lbl(a, 'arcbolt', 'arc bolt: hits arc to nearby bugs', '#ffe066'); a.xArc = EXTRA_FX.arcBolt; a.xZap = ZAP; a.bw = EXTRA_BW.arcBolt; },
-  ping(a) { lbl(a, 'teslaping', 'tesla beam: arcs from every bug pierced', '#ffe066'); a.xArc = EXTRA_FX.teslaPing; a.dmg *= 1.1; a.bw = EXTRA_BW.teslaPing; }
+  ping(a) { lbl(a, 'teslaping', 'tesla beam: arcs from every bug pierced', '#ffe066'); a.xArc = EXTRA_FX.teslaPing; a.dmg *= 1.1; a.bw = EXTRA_BW.teslaPing; },
+  rm(a) { lbl(a, 'thunder', 'thunder blade: lightning sword, arcs from each hit', '#ffe066'); a.xArc = EXTRA_FX.thunder; a.area *= 1.3; a.bw = EXTRA_BW.thunder; },
+  orbit(a) { lbl(a, 'stormorbit', 'storm orbit: blades arc to nearby bugs', '#ffe066'); a.xArc = EXTRA_FX.stormOrbit; a.bw = EXTRA_BW.stormOrbit; }
  },
  demolitionist: {
-  _d: 'Fires mine(), fireball() and nova(). mine() becomes a row of three ripple mines. fireball() becomes a mortar: lobbed to a fixed range, it flies over bugs and detonates in a big blast. nova() becomes a ring of four mines.',
-  fireball(a) { lbl(a, 'mortar', 'mortar: lobbed, big delayed-range blast', '#ff5c7a'); a.lob = 210; a.lobR = 66; a.lobMul = 1.5; a.pierce = 0; a.burn = 0; a.sp *= .9; a.bw = EXTRA_BW.mortar; },
-  nova(a) { lbl(a, 'ringmines', 'ring of 4 mines around you', '#ff5c7a'); a.ringMines = 4; a.dmg *= .55; a.mineR = a.rad * .5; a.bw = EXTRA_BW.ringMines; }
- }
-};
-for (const id in EXTRA) { const x = EXTRA[id], W = WANDS[id], keys = Object.keys(x).filter(k => k !== '_d'); W.extra = x; W.accepts = { spells: [...W.accepts.spells, ...keys], kinds: [] }; W.transforms = [...W.transforms, ...keys]; W.d = x._d; }
-
-// ---- Two more wands (multi-card from the start) ----
-WANDS.lancer = {
- n: 'Lancer Wand', short: 'LANCER', glyph: '>', col: '#8fd0ff', hue: 205,
- d: 'Fires lance() and ping(). lance() becomes a Harpoon that pierces everything and drags nearby bugs toward you. ping() becomes a Skewer beam that yanks every bug it hits back toward you.',
- accepts: { spells: ['lance', 'ping'], kinds: [] }, transforms: ['lance', 'ping'],
- art: [
-  [0, 2, 12, 3, K], [1, 3, 11, 1, '#5f7aa8'], [1, 2, 11, 1, '#9fb4d6'], [1, 4, 11, 1, '#3b4d70'], [0, 2, 3, 3, '#26324a'], [4, 3, 1, 1, '#e4ecfa'], [8, 3, 1, 1, '#e4ecfa'],
-  [12, 1, 2, 5, '#e2b24a'], [13, 0, 1, 7, K], [14, 2, 3, 3, '#8fd0ff'], [14, 1, 2, 1, '#8fd0ff'], [14, 5, 2, 1, '#8fd0ff'], [17, 3, 2, 1, '#e8f6ff'], [19, 3, 1, 1, '#ffffff'], [16, 2, 2, 1, '#e8f6ff'], [16, 4, 2, 1, '#e8f6ff']
- ],
- extra: {},
- xform(a, c) {
-  if (c.sp === 'lance') { lbl(a, 'harpoon', 'harpoon: pierces + pulls bugs in', '#8fd0ff'); a.pierce = 99; a.pull = Math.max(2, a.pull || 0); a.dmg *= 1.1; a.bw = EXTRA_BW.harpoon; }
-  else if (c.sp === 'ping') { lbl(a, 'skewer', 'skewer: beam that drags bugs back', '#8fd0ff'); a.pull = Math.max(1, a.pull || 0); a.dmg *= 1.1; a.bw = EXTRA_BW.skewer; }
+  fireball(a) { lbl(a, 'mortar', 'mortar: lobbed, big blast at range', '#ff5c7a'); a.lob = 210; a.lobR = 66; a.lobMul = 1.5; a.pierce = 0; a.burn = 0; a.sp *= .9; a.bw = EXTRA_BW.mortar; },
+  nova(a) { lbl(a, 'ringmines', 'ring of 4 mines around you', '#ff5c7a'); a.ringMines = 4; a.dmg *= .55; a.mineR = a.rad * .5; a.bw = EXTRA_BW.ringMines; },
+  rm(a) { lbl(a, 'breach', 'breaching slam: every hit detonates', '#ff5c7a'); a.xPulse = EXTRA_FX.breach; a.knock = Math.max(a.knock || 0, 320); a.bw = EXTRA_BW.breach; }
+ },
+ pulse: {
+  orbit(a) { lbl(a, 'pulseorbit', 'pulse orbit: blade hits emit shockwaves', '#5ee0d0'); a.xPulse = EXTRA_FX.pulseOrbit; a.bw = EXTRA_BW.pulseOrbit; }
  }
 };
 WANDS.pulse = {
- n: 'Pulse Wand', short: 'PULSE', glyph: 'O', col: '#5ee0d0', hue: 170,
- d: 'Fires nova() and chain(). nova() becomes a Pulse Cascade: three concentric shockwaves, brutal up close. chain() becomes a Pulse Relay: every bug it strikes releases its own small shockwave.',
+ n: 'Pulse Wand', short: 'PULSE', glyph: 'O', col: '#5ee0d0', hue: 170, d: '',
  accepts: { spells: ['nova', 'chain'], kinds: [] }, transforms: ['nova', 'chain'],
  art: [
   [1, 2, 11, 3, K], [2, 3, 9, 1, '#2e8f84'], [2, 2, 9, 1, '#5ee0d0'], [2, 4, 9, 1, '#1d5e57'], [1, 2, 3, 3, '#103a36'], [5, 3, 1, 1, '#d9fffa'], [8, 3, 1, 1, '#d9fffa'],
@@ -299,18 +288,62 @@ WANDS.pulse = {
   else if (c.sp === 'chain') { lbl(a, 'relay', 'pulse relay: each bug struck emits a shockwave', '#5ee0d0'); a.xPulse = EXTRA_FX.relay; a.bw = EXTRA_BW.relay; }
  }
 };
+const SIG = { cryomancer: ['stdout'], railgun: ['ping'], pyromancer: ['fireball'], swarm: ['bolt'], stormcaller: ['chain'], demolitionist: ['mine'] }; // cards the original (signature) xforms handle
+for (const id in EXTRA) { const x = EXTRA[id], W = WANDS[id], keys = Object.keys(x); W.extra = x; W.accepts = { spells: [...(W.accepts && W.accepts.spells || SIG[id] || []), ...keys.filter(k => !(W.accepts && W.accepts.spells || []).includes(k))], kinds: [] }; W.transforms = [...new Set([...(W.transforms || []), ...keys])]; }
+
+// ---- Wands built around several cards from the start ----
+WANDS.lancer = {
+ n: 'Lancer Wand', short: 'LANCER', glyph: '>', col: '#8fd0ff', hue: 205, d: '',
+ accepts: { spells: ['lance', 'ping'], kinds: [] }, transforms: ['lance', 'ping'],
+ art: [
+  [0, 2, 12, 3, K], [1, 3, 11, 1, '#5f7aa8'], [1, 2, 11, 1, '#9fb4d6'], [1, 4, 11, 1, '#3b4d70'], [0, 2, 3, 3, '#26324a'], [4, 3, 1, 1, '#e4ecfa'], [8, 3, 1, 1, '#e4ecfa'],
+  [12, 1, 2, 5, '#e2b24a'], [13, 0, 1, 7, K], [14, 2, 3, 3, '#8fd0ff'], [14, 1, 2, 1, '#8fd0ff'], [14, 5, 2, 1, '#8fd0ff'], [17, 3, 2, 1, '#e8f6ff'], [19, 3, 1, 1, '#ffffff'], [16, 2, 2, 1, '#e8f6ff'], [16, 4, 2, 1, '#e8f6ff']
+ ],
+ xform(a, c) {
+  if (c.sp === 'lance') { lbl(a, 'harpoon', 'harpoon: pierces + pulls bugs in', '#8fd0ff'); a.pierce = 99; a.pull = Math.max(2, a.pull || 0); a.dmg *= 1.1; a.bw = EXTRA_BW.harpoon; }
+  else if (c.sp === 'ping') { lbl(a, 'skewer', 'skewer: beam that drags bugs back', '#8fd0ff'); a.pull = Math.max(1, a.pull || 0); a.dmg *= 1.1; a.bw = EXTRA_BW.skewer; }
+ }
+};
+WANDS.gravity = {
+ n: 'Singularity Wand', short: 'SINGULARITY', glyph: '@', col: '#8a6bff', hue: 255, d: '',
+ accepts: { spells: ['nova', 'orbit', 'rm'], kinds: [] }, transforms: ['nova', 'orbit', 'rm'],
+ art: [
+  [1, 2, 11, 3, K], [2, 3, 9, 1, '#3a2f77'], [2, 2, 9, 1, '#6c55d8'], [2, 4, 9, 1, '#231b4d'], [1, 2, 3, 3, '#140f2e'], [5, 3, 1, 1, '#c9bcff'], [8, 3, 1, 1, '#c9bcff'],
+  [13, 1, 5, 5, K], [14, 0, 3, 7, K], [14, 1, 3, 5, '#0a0714'], [13, 2, 5, 3, '#0a0714'], [14, 2, 3, 3, '#000000'], [13, 3, 1, 1, '#8a6bff'], [17, 3, 1, 1, '#8a6bff'], [15, 1, 1, 1, '#b9a6ff'], [15, 5, 1, 1, '#b9a6ff'], [12, 3, 1, 1, '#8a6bff'], [18, 3, 2, 1, '#b9a6ff']
+ ],
+ xform(a, c) {
+  if (c.sp === 'nova') { lbl(a, 'gravwell', 'gravity well: drags bugs in, then crushes', '#8a6bff'); a.gravity = 1; a.knock = 0; a.dmg *= 1.15; a.bw = EXTRA_BW.gravWell; }
+  else if (c.sp === 'orbit') { lbl(a, 'horizon', 'event horizon: blades drag bugs in', '#8a6bff'); a.xPull = EXTRA_FX.horizonPull; a.bw = EXTRA_BW.horizon; }
+  else if (c.sp === 'rm') { lbl(a, 'grapple', 'grapple sweep: yanks the whole arc toward you', '#8a6bff'); a.xPull = EXTRA_FX.grapplePull; a.knock = 0; a.bw = EXTRA_BW.grapple; }
+ }
+};
+WANDS.prism = {
+ n: 'Prism Wand', short: 'PRISM', glyph: '<', col: '#ff9ae8', hue: 315, d: '',
+ accepts: { spells: ['bolt', 'fireball', 'lance'], kinds: [] }, transforms: ['bolt', 'fireball', 'lance'],
+ art: [
+  [1, 2, 10, 3, K], [2, 3, 8, 1, '#a24d90'], [2, 2, 8, 1, '#ff9ae8'], [2, 4, 8, 1, '#6b2d5e'], [1, 2, 3, 3, '#3d1736'], [5, 3, 1, 1, '#ffe6f8'], [8, 3, 1, 1, '#ffe6f8'],
+  [11, 3, 2, 1, '#ffe6f8'], [13, 1, 1, 5, K], [14, 0, 1, 7, K], [14, 1, 3, 5, '#ff9ae8'], [15, 2, 3, 3, '#ffffff'], [15, 3, 2, 1, '#8ff5ff'], [17, 0, 2, 2, '#ff9ae8'], [17, 5, 2, 2, '#9fe0ff'], [18, 3, 2, 1, '#fff2a8'], [16, 1, 1, 1, '#fff2a8'], [16, 5, 1, 1, '#c9ffd0']
+ ],
+ xform(a, c) {
+  if (c.sp === 'bolt') { lbl(a, 'ricochet', 'ricochet bolt: bounces off walls 4x', '#ff9ae8'); a.bounce = Math.max(a.bounce || 0, 4); a.bw = EXTRA_BW.ricochet; }
+  else if (c.sp === 'fireball') { lbl(a, 'refract', 'refractor: splits in two on every hit', '#ff9ae8'); a.pierce = 0; a.dmg *= .9; a.bw = EXTRA_BW.refract; }
+  else if (c.sp === 'lance') { lbl(a, 'spectrum', 'spectrum lance: fan of three lances', '#ff9ae8'); a.pc = Math.max(a.pc || 1, 3); a.dmg *= .55; a.bw = EXTRA_BW.spectrum; }
+ }
+};
 
 // ---- Compact per-card descriptions (shown as "Compatibility" lists in the equipment panel, reward cards and Storage) ----
 export const CARD_DESC = {
  universal: { '*': 'normal attacks, no changes' },
- cryomancer: { stdout: 'icy stream, freezes the floor', fireball: 'frost shell, freezes + ices ground', nova: 'freezing ring, ices ground' },
- railgun: { ping: 'heavy rail shot, ramps per bug', bolt: 'hitscan gauss bolt', lance: 'long siege rail, steep ramp' },
- pyromancer: { fireball: 'napalm shell + burn patch', bolt: 'ignites, burn patches on hit', mine: 'napalm mine, burn patches' },
- swarm: { bolt: 'cloud of homing drones', chain: 'tesla drones that arc lightning', fireball: 'burning ember drones' },
- stormcaller: { chain: 'forking lightning tree', bolt: 'arc bolt, hits jump to nearby', ping: 'tesla beam, arcs from each bug' },
- demolitionist: { mine: 'row of 3 ripple mines', fireball: 'mortar lob, big blast', nova: 'ring of 4 mines' },
+ cryomancer: { stdout: 'icy stream, freezes the floor', fireball: 'frost shell, freezes + ices ground', nova: 'freezing ring, ices ground', rm: 'frost blade, freezing sweep' },
+ railgun: { ping: 'rail shot, ramps per bug pierced', bolt: 'salvo of 3 piercing slugs', lance: 'sniper rail, 1 target, more dmg at range' },
+ pyromancer: { fireball: 'napalm shell + burn patch', bolt: 'ignites, burn patches on hit', mine: 'napalm mine, burn patches', rm: 'flame sword, fire on the ground', orbit: 'fire blades, burning orbit', stdout: 'inferno: longer flames, burn patches' },
+ swarm: { bolt: 'cloud of homing drones', chain: 'tesla drones that arc lightning', fireball: 'ember drones burst on contact', orbit: 'satellites: 2x blades, weaker' },
+ stormcaller: { chain: 'forking lightning tree', bolt: 'arc bolt, hits jump to nearby', ping: 'tesla beam, arcs from each bug', rm: 'thunder blade, arcing sword', orbit: 'storm orbit, blades arc' },
+ demolitionist: { mine: 'row of 3 ripple mines', fireball: 'mortar lob, big blast', nova: 'ring of 4 mines', rm: 'breaching slam, hits detonate' },
  lancer: { lance: 'harpoon, pierces + pulls bugs in', ping: 'skewer beam, drags bugs back' },
- pulse: { nova: '3 concentric shockwaves', chain: 'each bug struck emits a shockwave' }
+ pulse: { nova: '3 concentric shockwaves', chain: 'each bug struck emits a shockwave', orbit: 'blade hits emit shockwaves' },
+ gravity: { nova: 'gravity well: pulls in, then crushes', orbit: 'event horizon: blades pull bugs in', rm: 'grapple sweep: yanks the arc to you' },
+ prism: { bolt: 'ricochet bolt, bounces 4x', fireball: 'refractor: splits on every hit', lance: 'spectrum lance: fan of 3' }
 };
 export const wandCompat = id => Object.entries(CARD_DESC[id] || {}).map(([k, t]) => [k === '*' ? 'all attack cards' : k + '()', t]);
 for (const id in WANDS) WANDS[id].d = wandCompat(id).map(([k, t]) => k + ' : ' + t).join('; '); // short tooltip text

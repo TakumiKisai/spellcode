@@ -3,8 +3,9 @@ import { CARD_DESC, WANDS, WAND_ACQ, wandsOffered, canStoreWand, specialWands, w
 let fails = 0; const bad = m => { fails++; console.log('FAIL:', m); }, ok = (c, m) => { if (!c) bad(m); };
 const mkA = sp => ({ ...SPELLS[sp], rate: SPELLS[sp].rate, rep: 1, pc: 1, area: 1, size: 1, burn: SPELLS[sp].burn || 0, freeze: 0, pierce: SPELLS[sp].pierce || 0, dmg: SPELLS[sp].dmg, sp: SPELLS[sp].sp || 0, rad: SPELLS[sp].rad || 10, knock: SPELLS[sp].knock || 0, jumps: SPELLS[sp].jumps || 0 });
 const MATRIX = { // the cards each specialized wand fires; every pair has its own unique transformation
- cryomancer: ['stdout', 'fireball', 'nova'], railgun: ['ping', 'bolt', 'lance'], pyromancer: ['fireball', 'bolt', 'mine'], swarm: ['bolt', 'chain', 'fireball'],
- stormcaller: ['chain', 'bolt', 'ping'], demolitionist: ['mine', 'fireball', 'nova'], lancer: ['lance', 'ping'], pulse: ['nova', 'chain']
+ cryomancer: ['stdout', 'fireball', 'nova', 'rm'], railgun: ['ping', 'bolt', 'lance'], pyromancer: ['fireball', 'bolt', 'mine', 'rm', 'orbit', 'stdout'], swarm: ['bolt', 'chain', 'fireball', 'orbit'],
+ stormcaller: ['chain', 'bolt', 'ping', 'rm', 'orbit'], demolitionist: ['mine', 'fireball', 'nova', 'rm'], pulse: ['nova', 'chain', 'orbit'], lancer: ['lance', 'ping'],
+ gravity: ['nova', 'orbit', 'rm'], prism: ['bolt', 'fireball', 'lance']
 };
 const attackCards = Object.keys(SPELLS).filter(k => SPELLS[k].k !== 'self');
 // compatibility
@@ -27,11 +28,22 @@ for (const [w, cards] of Object.entries(MATRIX)) {
  for (const k of attackCards.filter(k => !cards.includes(k))) ok(applyWand(mkA(k), { sp: k }, w, SPELLS[k]).blocked, w + ' must block ' + k);
 }
 for (const [w, cards] of Object.entries(MATRIX)) for (const k of cards) ok(CARD_DESC[w] && CARD_DESC[w][k], w + '/' + k + ' has a compact description');
+{ // no two (wand, card) pairs may do the same thing: compare the stat changes each transformation makes
+ const sigs = new Map();
+ for (const [w, cards] of Object.entries(MATRIX)) for (const k of cards) {
+  const base = mkA(k), t2 = applyWand(mkA(k), { sp: k }, w, SPELLS[k]);
+  const diff = Object.keys(t2).filter(f => !['wand', 'blocked', 'fxLabel'].includes(f) && JSON.stringify(t2[f]) !== JSON.stringify(base[f])).sort().join(',');
+  const sig = k + '|' + diff; ok(!sigs.has(sig), w + '/' + k + ' does the same thing as ' + sigs.get(sig)); sigs.set(sig, w + '/' + k);
+  ok(!['same'].includes(diff), 'x');
+ }
+ const byCard = {}; for (const [w, cards] of Object.entries(MATRIX)) for (const k of cards) (byCard[k] ||= []).push(w);
+ for (const k of attackCards) ok((byCard[k] || []).length >= 2, k + ' needs at least two wands, has ' + (byCard[k] || []).length);
+}
 console.log('attack cards without a specialized wand yet:', attackCards.filter(k => !Object.values(MATRIX).flat().includes(k)).join(', '));
 // the wunderwaffe: chain under the Swarm Wand = arcing drones
 { const t = applyWand(mkA('chain'), { sp: 'chain' }, 'swarm', SPELLS.chain); ok(t.swarmN >= 3 && t.xArc && t.home && t.pierce === 0, 'swarm+chain = homing drones that arc lightning'); }
 { const r = applyWand(mkA('ping'), { sp: 'ping' }, 'railgun', SPELLS.ping); ok(r.dmg > SPELLS.ping.dmg * 2 && r.rate < SPELLS.ping.rate && r.railLen > 300, 'railgun: heavier, slower, longer than ping'); }
-{ const r = applyWand(mkA('bolt'), { sp: 'bolt' }, 'railgun', SPELLS.bolt); ok(r.k === 'beam' && r.railLen > 0, 'railgun+bolt is a hitscan beam'); }
+{ const r = applyWand(mkA('bolt'), { sp: 'bolt' }, 'railgun', SPELLS.bolt); ok(r.salvo === 3 && r.pierce === 99, 'railgun+bolt is a salvo of piercing slugs'); const q = applyWand(mkA('lance'), { sp: 'lance' }, 'railgun', SPELLS.lance); ok(q.k === 'beam' && q.railSnipe, 'railgun+lance is a sniper beam'); }
 { const r = applyWand(mkA('mine'), { sp: 'mine' }, 'demolitionist', SPELLS.mine); ok(r.clusterN === 3 && r.dmg < SPELLS.mine.dmg, 'demolitionist: three weaker mines'); }
 { const r = applyWand(mkA('lance'), { sp: 'lance' }, 'lancer', SPELLS.lance); ok(r.pierce === 99 && r.pull >= 2, 'lancer harpoon pierces and pulls'); }
 { const r = applyWand(mkA('nova'), { sp: 'nova' }, 'pulse', SPELLS.nova); ok(r.cascade && r.rad > SPELLS.nova.rad, 'pulse cascade'); }
@@ -47,7 +59,7 @@ ok(bwMaxFor('x', { bwmax: -5 }) >= BW_CFG.min && bwMaxFor('x', { bwmax: 1e9 }) =
 ok(bwRegen({}) === BW_CFG.bwr && bwRegen({ bwr: 0 }) === 0 && bwRegen({ bwr: -3 }) === 0, 'regen baseline / floor');
 ok(clampBW(250, 200) === 200 && clampBW(-4, 200) === 0 && clampBW(NaN, 200) === 0, 'clamp');
 // acquisition / storage rules
-ok(wandsOffered(['universal'], []).length === 8, 'all unowned wands are offered');
+ok(wandsOffered(['universal'], []).length === 10, 'all unowned wands are offered');
 ok(!wandsOffered(['universal', 'cryomancer'], []).includes('cryomancer'), 'owned wand is never offered again');
 ok(!wandsOffered(['universal'], ['cryomancer']).includes('cryomancer'), 'wand in Storage is never offered (no duplicates)');
 ok(wandsOffered(specialWands().concat('universal'), []).length === 0, 'nothing offered when everything is owned');
